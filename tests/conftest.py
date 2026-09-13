@@ -102,6 +102,14 @@ def tmp_input_copy(tmp_path):
 
 
 @pytest.fixture
+def no_ocr_config(tmp_path):
+    """OCR kapalı config dosyası: taranmış sayfa sonuçları makinede Tesseract kurulu olup olmamasına bağlı olmasın."""
+    path = tmp_path / "no_ocr.yaml"
+    path.write_text("ocr:\n  enabled: false\n", encoding="utf-8")
+    return path
+
+
+@pytest.fixture
 def tmp_output(tmp_path):
     """Giriş klasörünün dışında, henüz oluşturulmamış çıktı klasörü yolu."""
     return tmp_path / "output"

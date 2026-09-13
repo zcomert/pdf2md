@@ -7,6 +7,7 @@ from typing import Literal
 
 from . import dependencies
 from .errors import PreflightError
+from .ocr import find_tesseract, resolve_ocr_settings
 from .paths import input_root, is_pdf_path, is_within
 
 
@@ -88,6 +89,30 @@ def check_disk(output_dir, min_free_mb):
         return CheckResult("disk", False, "error",
                            f"Yetersiz disk alanı: {free_mb} MB boş, en az {min_free_mb} MB gerekli ({probe})")
     return _ok("disk", f"Boş disk alanı: {free_mb} MB")
+
+
+OCR_INSTALL_HINT = ("Windows: winget install UB-Mannheim.TesseractOCR (Türkçe için tur.traineddata dosyasını "
+                    "tessdata klasörüne ekleyin); Linux: apt install tesseract-ocr tesseract-ocr-tur; "
+                    "macOS: brew install tesseract tesseract-lang. Farklı konumdaysa ocr.tesseract_path ayarlayın")
+
+
+def check_ocr(config, info=None):
+    """§26: OCR etkinse Tesseract ve dil paketleri. Eksiklik uyarıdır; taranmış sayfalar görsel modele
+    yönlendirilir (Faz 07). Döner: (CheckResult, OcrSettings veya None)."""
+    if not config.ocr.enabled:
+        return _ok("ocr", "OCR kapalı"), None
+    info = info if info is not None else find_tesseract(config.ocr.tesseract_path)
+    settings, messages = resolve_ocr_settings(config.ocr, config.pdf.render_dpi, info=info)
+    if info is None:
+        return CheckResult("ocr", False, "warning", "Tesseract bulunamadı; taranmış sayfalar OCR'lanamayacak",
+                           OCR_INSTALL_HINT), None
+    if settings is None:
+        return CheckResult("ocr", False, "warning", "; ".join(messages) + f" (kurulu: {', '.join(info.languages)})",
+                           OCR_INSTALL_HINT), None
+    detail = f"Tesseract {info.version or '?'} ({info.tessdata}), diller: {settings.languages}"
+    if messages:
+        return CheckResult("ocr", False, "warning", f"{'; '.join(messages)}. {detail}", OCR_INSTALL_HINT), settings
+    return _ok("ocr", detail), settings
 
 
 def run_preflight(config, input_path, output_dir):

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from . import PARSER_VERSION
 from .atomic_io import atomic_write_json
 from .document_model import DOCUMENT_SCHEMA_VERSION, DocumentModel
+from .ocr import OCR_UNAVAILABLE_SIGNATURE
 from .paths import ensure_under_output
 
 CACHE_DIR = "_cache"
@@ -44,9 +45,10 @@ class CacheManager:
             raise ValueError(f"Geçersiz plan hash: {plan_hash!r}")
         return self.doc_dir(sha256) / "extractions" / f"{plan_hash}.json"
 
-    def load_document(self, sha256, parse_config_hash, force=False):
+    def load_document(self, sha256, parse_config_hash, force=False, ocr_signature=None):
         """Geçerli önbellek kaydı veya None. Dosya yok, JSON bozuk, şema/ayrıştırıcı sürümü ya da
-        ayrıştırma ayarları farklıysa kayıt geçersiz sayılır."""
+        ayrıştırma ayarları farklıysa kayıt geçersiz sayılır. Taranmış sayfa içeren belgede OCR imzası
+        (Tesseract kuruldu/kaldırıldı, dil veya DPI değişti) farklıysa da geçersizdir."""
         if force:
             return None
         path = self.document_json_path(sha256)
@@ -63,7 +65,11 @@ class CacheManager:
             document = DocumentModel.model_validate(raw)
         except ValidationError:
             return None
-        return document if document.source.sha256 == sha256 else None
+        if document.source.sha256 != sha256:
+            return None
+        if document.stats.scanned_pages and document.ocr_signature != (ocr_signature or OCR_UNAVAILABLE_SIGNATURE):
+            return None
+        return document
 
     def save_document(self, document):
         # Satır düzeyindeki koordinatlar dosyanın çoğunu oluşturur; girintisiz yazım boyutu ~%45 azaltır.

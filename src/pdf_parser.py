@@ -11,7 +11,8 @@ import fitz
 
 from . import PARSER_VERSION
 from .document_model import (Block, BlockType, Candidate, CandidateKind, DocumentModel, DocumentSource,
-                             DocumentStats, DocumentWarning, Equation, Figure, Line, Page, PageClass, Section, Table)
+                             DocumentStats, DocumentWarning, Equation, Figure, Line, Page, PageClass, Section,
+                             SourceMethod, Table)
 from .errors import DocumentError, ErrorStage
 from .layout_analyzer import (NUMBERING_RE, RawBlock, RawLine, body_font_size, classify_blocks, detect_gutter,
                               document_gutter, gutter_fits, mark_header_footer, normalize_heading_text, order_page,
@@ -19,6 +20,7 @@ from .layout_analyzer import (NUMBERING_RE, RawBlock, RawLine, body_font_size, c
 from .paths import safe_filename
 from .table_extractor import to_html, to_markdown
 from .visual_detector import detect_page_visuals
+from .ocr import OCR_UNAVAILABLE_SIGNATURE, build_ocr_blocks, merge_ocr_blocks, ocr_page, text_line_boxes
 from .page_classifier import DRAWING_COUNT_CHAR_LIMIT, classify_page, image_area_ratio
 
 # Ligatürler açılır (ﬁ → fi), boşluklar korunur, sayfa dışı metin atılır. Görseller `dict` çıktısına
@@ -55,15 +57,16 @@ def open_pdf(path):
     return doc
 
 
-def parse_pdf(path, relative_path, sha256, pdf_config):
+def parse_pdf(path, relative_path, sha256, pdf_config, ocr_settings=None):
+    """`ocr_settings` (`OcrSettings`) verilmezse taranmış sayfalar OCR'lanmaz ve `ocr_unavailable` uyarısı alır."""
     doc = open_pdf(path)
     try:
-        return _parse_document(doc, relative_path, sha256, pdf_config)
+        return _parse_document(doc, relative_path, sha256, pdf_config, ocr_settings)
     finally:
         doc.close()
 
 
-def _parse_document(doc, relative_path, sha256, pdf_config):
+def _parse_document(doc, relative_path, sha256, pdf_config, ocr_settings=None):
     warnings = []
     if getattr(doc, "is_repaired", False):
         warnings.append(DocumentWarning(code="pdf_repaired", message="PDF yapısı onarılarak açıldı"))
@@ -72,7 +75,8 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
     for page in doc:
         number = page.number + 1
         info = {"number": number, "width": page.rect.width, "height": page.rect.height, "blocks": [],
-                "error": None, "image_ratio": 0.0, "drawing_count": None, "garbled": False, "images": []}
+                "error": None, "image_ratio": 0.0, "drawing_count": None, "garbled": False, "images": [],
+                "ocr_applied": False}
         try:
             blocks, char_count, garbled = _extract_blocks(page, number)
             images = page.get_image_info(xrefs=True)
@@ -90,13 +94,20 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
     mark_header_footer([(p["number"], p["width"], p["height"], p["blocks"]) for p in raw_pages])
     body_size = body_font_size([b for p in raw_pages for b in p["blocks"]])
 
-    # Sayfa sınıfı okuma sırasından bağımsızdır; taranmış sayfalarda görsel tespit yapılmaz (Faz 06–07).
-    page_visuals = {}
     for info in raw_pages:
         body_chars = sum(b.chars for b in info["blocks"] if b.type != BlockType.header_footer and not b.is_image)
         info["body_chars"] = body_chars
         info["class"], info["codes"] = (PageClass.text, []) if info["error"] else classify_page(
             body_chars, info["image_ratio"], info["drawing_count"], pdf_config)
+        if info["class"] == PageClass.scanned and not info["error"]:
+            warnings.extend(_apply_ocr(doc[info["number"] - 1], info, ocr_settings))
+    if any(info["ocr_applied"] for info in raw_pages):
+        # OCR bloklarındaki tekrarlanan üst/alt bilgiler de işaretlensin
+        mark_header_footer([(p["number"], p["width"], p["height"], p["blocks"]) for p in raw_pages])
+
+    # Taranmış sayfalarda görsel tespit yapılmaz; tablo/şekil içerikleri görsel modelin konusudur (Faz 07).
+    page_visuals = {}
+    for info in raw_pages:
         if info["error"] or info["class"] == PageClass.scanned:
             continue
         try:
@@ -115,7 +126,9 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
             gutter = shared_gutter
         ordered, columns, gutter, uncertain = order_page(info["blocks"], info["width"], info["height"], gutter)
         codes = info["codes"]
-        warnings.extend(DocumentWarning(code=code, page=info["number"]) for code in codes)
+        # OCR başarıyla uygulandıysa içerik kaybı yoktur; vektör metin şüphesi sayfa bayrağında kalır, uyarı olmaz.
+        warnings.extend(DocumentWarning(code=code, page=info["number"]) for code in codes
+                        if not (info["ocr_applied"] and code == "vector_text_suspected"))
         if info["garbled"]:
             warnings.append(DocumentWarning(code="garbled_text", page=info["number"]))
         pages.append(Page(number=info["number"], width=info["width"], height=info["height"], page_class=info["class"],
@@ -123,7 +136,8 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
                           text_block_count=sum(1 for b in ordered if not b.is_image),
                           image_area_ratio=info["image_ratio"], drawing_count=info["drawing_count"],
                           columns=columns, gutter_x=gutter, reading_order_uncertain=uncertain,
-                          vector_text_suspected="vector_text_suspected" in codes, parse_error=info["error"]))
+                          vector_text_suspected="vector_text_suspected" in codes, parse_error=info["error"],
+                          ocr_applied=info["ocr_applied"]))
         ordered_pages.append((info["number"], ordered))
 
     metadata = {key: value.strip() for key, value in (doc.metadata or {}).items() if isinstance(value, str) and value.strip()}
@@ -134,12 +148,32 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
     stats = DocumentStats(pages=len(pages),
                           text_pages=sum(p.page_class == PageClass.text for p in pages),
                           mixed_pages=sum(p.page_class == PageClass.mixed for p in pages),
-                          scanned_pages=sum(p.page_class == PageClass.scanned for p in pages))
+                          scanned_pages=sum(p.page_class == PageClass.scanned for p in pages),
+                          ocr_pages=sum(p.ocr_applied for p in pages))
+    ocr_signature = None
+    if stats.scanned_pages:
+        ocr_signature = ocr_settings.signature if ocr_settings else OCR_UNAVAILABLE_SIGNATURE
     return DocumentModel(parser_version=PARSER_VERSION, parse_config_hash=parse_config_hash(pdf_config),
                          source=DocumentSource(relative_path=relative_path, sha256=sha256, page_count=doc.page_count),
                          pdf_metadata=metadata, title=title, pages=pages, blocks=blocks, sections=sections,
                          tables=tables, equations=equations, figures=figures, candidates=candidates,
-                         warnings=warnings, stats=stats)
+                         warnings=warnings, stats=stats, ocr_signature=ocr_signature)
+
+
+def _apply_ocr(page, info, settings):
+    """Taranmış sayfayı OCR'lar ve metin katmanıyla birleştirir (§11.4). Döner: uyarılar. OCR yoksa veya
+    başarısızsa sayfa görsel model adayı olarak kalır (Faz 07); ikisi de yoksa `[unreadable_page]`."""
+    number = info["number"]
+    if settings is None:
+        return [DocumentWarning(code="ocr_unavailable", page=number)]
+    try:
+        words, line_sizes = ocr_page(page, settings, TEXT_FLAGS)
+        ocr_blocks = build_ocr_blocks(number, words, line_sizes, info["width"], text_line_boxes(info["blocks"]))
+    except Exception as exc:
+        return [DocumentWarning(code="ocr_failed", page=number, message=f"{type(exc).__name__}: {exc}")]
+    info["blocks"], added = merge_ocr_blocks(info["blocks"], ocr_blocks)
+    info["ocr_applied"] = True
+    return [] if added else [DocumentWarning(code="ocr_empty", page=number)]
 
 
 def _visual_models(page_visuals, block_ids, blocks, sections):
@@ -259,8 +293,9 @@ def _expand_numbers(text):
     return numbers
 
 
-def _extract_blocks(page, number):
-    data = page.get_text("dict", flags=TEXT_FLAGS)
+def _extract_blocks(page, number, data=None):
+    """`data` verilirse (ör. OCR metin sayfasının `dict` çıktısı) sayfa yeniden okunmaz."""
+    data = data if data is not None else page.get_text("dict", flags=TEXT_FLAGS)
     blocks, char_count, replacement_chars = [], 0, 0
     for raw in data["blocks"]:
         if raw.get("type") != 0:
@@ -308,6 +343,7 @@ def _to_blocks(ordered_pages):
             text = raw.text if not raw.is_image else ""
             blocks.append(Block(
                 id=f"p{number}-b{index}", type=raw.type, page=number, bbox=_round_bbox(raw.bbox), text=text,
+                source_method=SourceMethod(raw.source),
                 lines=[Line(text=l.text, bbox=_round_bbox(l.bbox), font=l.font, size=l.size, bold=l.bold, italic=l.italic)
                        for l in raw.lines],
                 font=raw.font, size=raw.size, bold=raw.bold if raw.lines else False,

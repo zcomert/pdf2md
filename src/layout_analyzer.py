@@ -35,6 +35,7 @@ class RawBlock:
     heading_level: int | None = None
     heading_number: str | None = None
     ref_id: str | None = None
+    source: str = "text"  # text | ocr | vision
 
     @property
     def text(self):
@@ -102,7 +103,7 @@ def split_by_style(block):
             groups[-1].append(line)
     if len(groups) == 1:
         return [block]
-    return [RawBlock(block.page, bbox_union(line.bbox for line in group), group) for group in groups]
+    return [RawBlock(block.page, bbox_union(line.bbox for line in group), group, source=block.source) for group in groups]
 
 
 # --- Okuma sırası ---------------------------------------------------------------------------------
@@ -253,9 +254,10 @@ def merge_indented_first_lines(ordered):
                 and previous.bbox[0] > block.bbox[0] + 3 and previous.bbox[2] >= block.bbox[2] - 6
                 and block.bbox[1] - previous.bbox[3] <= 2
                 and abs(previous.size - block.size) <= 0.3 and previous.bold == block.bold
+                and previous.source == block.source
                 and previous.lines[0].italic == block.lines[0].italic is False):
             result[-1] = RawBlock(block.page, bbox_union([previous.bbox, block.bbox]), previous.lines + block.lines,
-                                  column=block.column)
+                                  column=block.column, source=block.source)
         else:
             result.append(block)
     return result

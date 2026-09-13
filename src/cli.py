@@ -15,7 +15,7 @@ from .errors import PreflightError
 from .logger import add_file_handler, new_run_id, setup_logging, unique_run_id
 from .paths import default_output_dir, normalize
 from .pdf_discovery import discover, sync_with_state
-from .preflight import raise_on_errors, run_preflight
+from .preflight import check_ocr, raise_on_errors, run_preflight
 from .schemas import RunSummary
 from .state_manager import OutputLock, StateManager
 
@@ -135,6 +135,8 @@ def main(argv=None, events=None, cancel_token=None):
         input_path = normalize(config.input_dir)
         output_dir = normalize(config.output_dir) if config.output_dir else default_output_dir(input_path)
         checks = run_preflight(config, input_path, output_dir)
+        ocr_check, ocr_settings = check_ocr(config)
+        checks.append(ocr_check)
         _log_checks(logger, checks)
         raise_on_errors(checks)
     except PreflightError as exc:
@@ -189,7 +191,8 @@ def main(argv=None, events=None, cancel_token=None):
         print(discovery_message)
 
         processor = BatchProcessor(config, state, CacheManager(output_dir), output_dir, run_id, logger, prompt,
-                                   force=args.force, events=events or ConsoleEvents(), cancel_token=token)
+                                   force=args.force, events=events or ConsoleEvents(), cancel_token=token,
+                                   ocr_settings=ocr_settings)
         cancelled = False
         try:
             processor.run(result, summary)

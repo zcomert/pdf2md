@@ -4,7 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-DOCUMENT_SCHEMA_VERSION = "1.1"
+DOCUMENT_SCHEMA_VERSION = "1.2"
 
 BBox = tuple[float, float, float, float]
 
@@ -206,6 +206,7 @@ class DocumentModel(StrictModel):
     equations: list[Equation] = []
     figures: list[Figure] = []
     candidates: list[Candidate] = []
+    ocr_signature: str | None = Field(None, description="Taranmış sayfa varsa kullanılan OCR (dil, sürüm, DPI) veya 'unavailable'")
     warnings: list[DocumentWarning] = []
     stats: DocumentStats = DocumentStats()
 

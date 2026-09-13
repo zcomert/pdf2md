@@ -101,7 +101,7 @@ def _non_empty(path):
 
 class BatchProcessor:
     def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
-                 events=None, cancel_token=None, now=None):
+                 events=None, cancel_token=None, now=None, ocr_settings=None):
         self.config = config
         self.state = state
         self.cache = cache
@@ -114,6 +114,7 @@ class BatchProcessor:
         self.cancel_token = cancel_token or CancelToken()
         self._now = now or (lambda: datetime.now().isoformat(timespec="seconds"))
         self._config_hash = parse_config_hash(config.pdf)
+        self.ocr_settings = ocr_settings
 
     def run(self, discovery, summary):
         """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled` yayılır;
@@ -206,16 +207,18 @@ class BatchProcessor:
         self.events.on_document_end(rel, status, warnings, output_rel)
 
     def _load_or_parse(self, pdf, record, summary):
-        document = self.cache.load_document(record.sha256, self._config_hash, force=self.force)
+        signature = self.ocr_settings.signature if self.ocr_settings else None
+        document = self.cache.load_document(record.sha256, self._config_hash, force=self.force, ocr_signature=signature)
         if document is not None:
             summary.parsed_from_cache += 1
             return document
-        document = parse_pdf(pdf.absolute_path, pdf.relative_path, record.sha256, self.config.pdf)
+        document = parse_pdf(pdf.absolute_path, pdf.relative_path, record.sha256, self.config.pdf, self.ocr_settings)
         self.cache.save_document(document)
         summary.parsed += 1
         classes = ", ".join(f"{name}={count}" for name, count in (("text", document.stats.text_pages),
                             ("mixed", document.stats.mixed_pages), ("scanned", document.stats.scanned_pages)) if count)
-        self.logger.info("Ayrıştırıldı: %s (%d sayfa: %s)", pdf.relative_path, document.stats.pages, classes)
+        ocr = f", OCR {document.stats.ocr_pages} sayfa" if document.stats.ocr_pages else ""
+        self.logger.info("Ayrıştırıldı: %s (%d sayfa: %s%s)", pdf.relative_path, document.stats.pages, classes, ocr)
         return document
 
     def _context(self, relative_path, sha256, status, available_assets=frozenset()):

@@ -61,8 +61,8 @@ def test_leftover_temp_files_are_cleaned(tmp_input_copy, tmp_output):
     assert not leftover.exists()
 
 
-def test_interrupted_processing_records_recovered(tmp_input_copy, tmp_output):
-    args = [str(tmp_input_copy), "--output", str(tmp_output)]
+def test_interrupted_processing_records_recovered(tmp_input_copy, tmp_output, no_ocr_config):
+    args = [str(tmp_input_copy), "--output", str(tmp_output), "--config", str(no_ocr_config)]
     assert main(args) == EXIT_DOC_FAILED
     state = load_state(tmp_output)
     state["documents"]["synthetic_scanned.pdf"].update(status="processing", attempts=1)

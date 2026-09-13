@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.batch_processor import BatchEvents, CancelToken
 from src.cli import EXIT_CANCELLED, EXIT_DOC_FAILED, EXIT_OK, EXIT_PREFLIGHT, main
 from src.document_model import DocumentModel
@@ -16,9 +18,9 @@ def run(tmp_input_copy, tmp_output, *extra, **kwargs):
     return main([str(tmp_input_copy), "--output", str(tmp_output), *extra], **kwargs)
 
 
-def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys):
+def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys, no_ocr_config):
     before = input_snapshot(tmp_input_copy)
-    assert run(tmp_input_copy, tmp_output, "--recursive") == EXIT_DOC_FAILED
+    assert run(tmp_input_copy, tmp_output, "--recursive", "--config", str(no_ocr_config)) == EXIT_DOC_FAILED
     state = load_state(tmp_output)
     for rel, record in state["documents"].items():
         if rel in UNOPENABLE:
@@ -38,9 +40,11 @@ def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys):
     # §38 kriter 3: aynı adlı iki PDF çakışmaz
     assert (tmp_output / "synthetic_single_column" / "synthetic_single_column.md").is_file()
     assert (tmp_output / "subdir" / "synthetic_single_column" / "synthetic_single_column.md").is_file()
-    # taranmış sayfa içeriği henüz çıkarılamıyor: işaretli ve uyarılı
+    # OCR kapalıyken taranmış sayfa içeriği çıkarılamaz: işaretli ve uyarılı
     scanned = state["documents"]["synthetic_scanned.pdf"]
-    assert scanned["status"] == "completed_with_warnings" and "unreadable_page: page 1" in scanned["warnings"]
+    assert scanned["status"] == "completed_with_warnings"
+    assert {"ocr_unavailable: page 1", "unreadable_page: page 1"} <= set(scanned["warnings"])
+    assert "[unreadable_page]" in (tmp_output / scanned["output_path"]).read_text(encoding="utf-8")
     output = capsys.readouterr().out
     assert "completed 7, completed_with_warnings 1, failed 3, skipped 0" in output
     assert "Ayrıştırma: 7 ayrıştırıldı, 1 önbellekten." in output
@@ -131,9 +135,9 @@ class CancelAfterFirst(BatchEvents):
         self.token.cancel()
 
 
-def test_cancellation_exit_code_and_resume(tmp_input_copy, tmp_output, capsys):
+def test_cancellation_exit_code_and_resume(tmp_input_copy, tmp_output, capsys, no_ocr_config):
     token = CancelToken()
-    args = ("--include", "synthetic_s*.pdf")
+    args = ("--include", "synthetic_s*.pdf", "--config", str(no_ocr_config))
     assert run(tmp_input_copy, tmp_output, *args, events=CancelAfterFirst(token), cancel_token=token) == EXIT_CANCELLED
     output = capsys.readouterr().out
     assert "İptal edildi: 1 belge işlenmeden kaldı" in output
@@ -142,3 +146,40 @@ def test_cancellation_exit_code_and_resume(tmp_input_copy, tmp_output, capsys):
     assert not (tmp_output / ".lock").exists()
     assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK
     assert "skipped 1" in capsys.readouterr().out
+
+
+# --- Faz 06: OCR ---
+
+@pytest.mark.requires_tesseract
+def test_scanned_pdf_is_ocr_converted(tmp_input_copy, tmp_output):
+    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_scanned.pdf") == EXIT_OK
+    record = load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]
+    assert record["status"] == "completed" and record["warnings"] == []
+    markdown = (tmp_output / record["output_path"]).read_text(encoding="utf-8")
+    assert "[unreadable_page]" not in markdown and "recover these sentences reliably" in markdown
+    document = DocumentModel.model_validate_json(
+        (tmp_output / "_cache" / record["sha256"] / "document.json").read_text(encoding="utf-8"))
+    assert document.stats.ocr_pages == 1 and document.ocr_signature.startswith("tesseract:")
+
+
+@pytest.mark.requires_tesseract
+def test_enabling_ocr_invalidates_cached_scanned_document(tmp_input_copy, tmp_output, no_ocr_config, capsys):
+    args = ("--include", "synthetic_s*.pdf")
+    assert run(tmp_input_copy, tmp_output, *args, "--config", str(no_ocr_config)) == EXIT_OK
+    capsys.readouterr()
+    # OCR açılınca yalnızca taranmış sayfalı belgenin önbelleği geçersiz olur; diğeri önbellekten gelir.
+    assert run(tmp_input_copy, tmp_output, *args, "--force") == EXIT_OK
+    capsys.readouterr()
+    (tmp_output / load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]["output_path"]).unlink()
+    (tmp_output / load_state(tmp_output)["documents"]["synthetic_single_column.pdf"]["output_path"]).unlink()
+    assert run(tmp_input_copy, tmp_output, *args, "--config", str(no_ocr_config)) == EXIT_OK
+    assert "Ayrıştırma: 1 ayrıştırıldı, 1 önbellekten." in capsys.readouterr().out
+
+
+def test_missing_tesseract_is_a_warning_not_an_error(tmp_input_copy, tmp_output, tmp_path, capsys):
+    config = tmp_path / "missing_tesseract.yaml"
+    config.write_text(f"ocr:\n  tesseract_path: {str(tmp_path / 'yok' / 'tesseract.exe')!r}\n", encoding="utf-8")
+    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_scanned.pdf", "--config", str(config)) == EXIT_OK
+    assert "Tesseract bulunamadı" in capsys.readouterr().err
+    record = load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]
+    assert record["status"] == "completed_with_warnings" and "ocr_unavailable: page 1" in record["warnings"]
