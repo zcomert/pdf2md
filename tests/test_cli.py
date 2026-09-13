@@ -26,6 +26,7 @@ def test_missing_input_returns_preflight_exit(isolated_cwd, capsys):
     assert "Giriş yolu verilmedi" in capsys.readouterr().err
 
 def test_input_from_config_file_is_accepted(isolated_cwd):
+    (isolated_cwd / "papers").mkdir()
     (isolated_cwd / "config.yaml").write_text("input_dir: papers\n", encoding="utf-8")
     assert main([]) == EXIT_OK
 
@@ -34,11 +35,14 @@ def test_invalid_config_returns_preflight_exit(isolated_cwd, capsys):
     assert main(["papers"]) == EXIT_PREFLIGHT
     assert "mode" in capsys.readouterr().err
 
-def test_valid_run_does_not_create_output_dir(isolated_cwd):
+def test_plan_only_does_not_create_output_dir(isolated_cwd):
+    (isolated_cwd / "papers").mkdir()
     output = isolated_cwd / "out"
-    assert main(["papers", "--output", str(output)]) == EXIT_OK
+    assert main(["papers", "--output", str(output), "--plan-only"]) == EXIT_OK
     assert not output.exists()
 
 def test_prompt_and_prompt_file_warning_prefers_prompt(isolated_cwd, capsys):
-    assert main(["papers", "--prompt", "a", "--prompt-file", "b.md"]) == EXIT_OK
+    (isolated_cwd / "papers").mkdir()
+    # Boş --prompt kazanır (b.md hiç okunmaz) ve varsayılan dönüşüme düşer
+    assert main(["papers", "--prompt", " ", "--prompt-file", "b.md"]) == EXIT_OK
     assert "--prompt önceliklidir" in capsys.readouterr().err

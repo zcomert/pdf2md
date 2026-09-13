@@ -1,0 +1,216 @@
+"""İş akışı orkestrasyonu (Faz 04: varsayılan prompt ile tam dönüşüm).
+
+GUI (Faz 13) aynı çekirdeği kullanabilsin diye ilerleme `BatchEvents` ile bildirilir, iptal ve duraklatma
+`CancelToken` ile işbirlikçi olarak yapılır: belge ve aşama sınırlarında kontrol edilir.
+"""
+import threading
+import time
+from datetime import datetime
+
+from .atomic_io import atomic_write_text
+from .errors import DocumentError, ErrorStage
+from .markdown_builder import RenderContext, build_full_conversion, unreadable_pages
+from .paths import ensure_under_output, resolve_output_paths
+from .pdf_parser import parse_config_hash, parse_pdf
+from .schemas import DocumentStatus, HistoryEntry
+
+COMPLETED_STATUSES = {DocumentStatus.completed, DocumentStatus.completed_with_warnings}
+
+
+class Cancelled(Exception):
+    """Kullanıcı iptal etti; belge yarım bırakılmadan çalışma durduruldu."""
+
+
+class CancelToken:
+    def __init__(self):
+        self._cancelled = threading.Event()
+        self._running = threading.Event()
+        self._running.set()
+
+    def cancel(self):
+        self._cancelled.set()
+        self._running.set()
+
+    def pause(self):
+        self._running.clear()
+
+    def resume(self):
+        self._running.set()
+
+    @property
+    def cancelled(self):
+        return self._cancelled.is_set()
+
+    @property
+    def paused(self):
+        return not self._running.is_set()
+
+    def checkpoint(self):
+        """Duraklatılmışsa devam edilene kadar bekler; iptal edilmişse `Cancelled` fırlatır."""
+        while not self._running.wait(timeout=0.2):
+            pass
+        if self._cancelled.is_set():
+            raise Cancelled()
+
+
+class BatchEvents:
+    """İlerleme bildirimleri. Varsayılan gerçekleme hiçbir şey yapmaz; CLI ve GUI alt sınıf yazar."""
+
+    def on_run_start(self, total):
+        pass
+
+    def on_document_start(self, relative_path, index, total):
+        pass
+
+    def on_stage(self, relative_path, stage):
+        pass
+
+    def on_document_end(self, relative_path, status, warnings, output_path, error=None):
+        pass
+
+    def on_run_end(self, summary):
+        pass
+
+
+def decide(record, prompt_sha256, output_file, retry_failed, force):
+    """Döner: `process`, `skip` veya `not_selected`.
+
+    Atlama (§9.3, Faz 04 hali): durum tamamlanmış, prompt hash'i aynı ve çıktı dosyası mevcut ve boş değil.
+    SHA-256 değişimi keşif aşamasında belgeyi zaten `pending` yapar. Plan hash'i (mod, modeller, ayrıştırıcı
+    sürümü) Faz 08–10'da eklenecek.
+    """
+    if force:
+        return "process"
+    if record.status in COMPLETED_STATUSES:
+        if record.prompt_sha256 == prompt_sha256 and output_file is not None and _non_empty(output_file):
+            return "skip"
+        return "process"
+    if record.status == DocumentStatus.failed and not retry_failed:
+        return "not_selected"
+    return "process"
+
+
+def _non_empty(path):
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+class BatchProcessor:
+    def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
+                 events=None, cancel_token=None, now=None):
+        self.config = config
+        self.state = state
+        self.cache = cache
+        self.output_dir = output_dir
+        self.run_id = run_id
+        self.logger = logger
+        self.prompt = prompt
+        self.force = force
+        self.events = events or BatchEvents()
+        self.cancel_token = cancel_token or CancelToken()
+        self._now = now or (lambda: datetime.now().isoformat(timespec="seconds"))
+        self._config_hash = parse_config_hash(config.pdf)
+
+    def run(self, discovery, summary):
+        """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled` yayılır;
+        o ana kadarki durum state'e yazılmış olur."""
+        started = time.monotonic()
+        documents = [(pdf, self.state.get(pdf.relative_path)) for pdf in discovery.documents]
+        documents = [(pdf, record) for pdf, record in documents if record is not None and record.sha256]
+        existing = {rel: record.output_path for rel, record in self.state.state.documents.items() if record.output_path}
+        planned = resolve_output_paths([(pdf.relative_path, record.sha256) for pdf, record in documents], existing)
+
+        self.events.on_run_start(len(documents))
+        try:
+            for index, (pdf, record) in enumerate(documents, start=1):
+                self.cancel_token.checkpoint()
+                output_file = self.output_dir / record.output_path if record.output_path else None
+                decision = decide(record, self.prompt.sha256, output_file, self.config.processing.retry_failed, self.force)
+                if decision == "skip":
+                    summary.skipped += 1
+                    self.logger.info("Atlandı (değişmedi): %s", pdf.relative_path)
+                    self.events.on_document_end(pdf.relative_path, DocumentStatus.skipped, record.warnings, record.output_path)
+                    continue
+                if decision == "not_selected":
+                    summary.not_retried += 1
+                    self.logger.info("Denenmedi (önceki çalıştırmada başarısız; --retry-failed): %s", pdf.relative_path)
+                    continue
+                self.events.on_document_start(pdf.relative_path, index, len(documents))
+                self._process(pdf, record, planned[pdf.relative_path], summary)
+        finally:
+            summary.total_time_sec = round(time.monotonic() - started, 2)
+            self.events.on_run_end(summary)
+        return summary
+
+    def _process(self, pdf, record, output_rel, summary):
+        rel = pdf.relative_path
+        self.state.update(rel, status=DocumentStatus.processing, attempts=record.attempts + 1, last_run_id=self.run_id)
+        started = time.monotonic()
+        stage = ErrorStage.parse
+        try:
+            self.events.on_stage(rel, "parse")
+            document = self._load_or_parse(pdf, record, summary)
+            self.cancel_token.checkpoint()
+
+            stage = ErrorStage.write
+            self.events.on_stage(rel, "write")
+            warnings = [str(w) for w in document.warnings] + list(self.prompt.run_warnings)
+            warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
+                         if f"unreadable_page: page {n}" not in warnings]
+            status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+            markdown = build_full_conversion(document, self._context(rel, record.sha256, status))
+            target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
+            self.cancel_token.checkpoint()
+            atomic_write_text(target, markdown)
+        except Cancelled:
+            self.state.update(rel, status=DocumentStatus.pending)
+            raise
+        except DocumentError as exc:
+            return self._fail(rel, exc.stage, exc.message, summary)
+        except OSError as exc:
+            return self._fail(rel, ErrorStage.write, f"Yazılamadı: {exc}", summary)
+        except Exception as exc:  # beklenmeyen hata tek bir PDF yüzünden batch'i durdurmamalı
+            self.logger.exception("Beklenmeyen hata [%s]: %s", stage.value, rel)
+            return self._fail(rel, stage, f"{type(exc).__name__}: {exc}", summary)
+
+        history = list(record.history)
+        if record.status in COMPLETED_STATUSES and record.prompt_sha256 and record.prompt_sha256 != self.prompt.sha256:
+            history.append(HistoryEntry(prompt_sha256=record.prompt_sha256, plan_hash=record.plan_hash,
+                                        output_path=record.output_path, status=record.status,
+                                        processed_at=record.processed_at, run_id=record.last_run_id))
+        elapsed = round(time.monotonic() - started, 2)
+        self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
+                          prompt_sha256=self.prompt.sha256, processed_at=self._now(), processing_time_sec=elapsed,
+                          error_stage=None, error=None, models={}, history=history)
+        if status == DocumentStatus.completed:
+            summary.completed += 1
+        else:
+            summary.completed_with_warnings += 1
+        self.logger.info("Tamamlandı [%s]: %s → %s (%.1f sn, %d uyarı)", status.value, rel, output_rel, elapsed, len(warnings))
+        self.events.on_document_end(rel, status, warnings, output_rel)
+
+    def _load_or_parse(self, pdf, record, summary):
+        document = self.cache.load_document(record.sha256, self._config_hash, force=self.force)
+        if document is not None:
+            summary.parsed_from_cache += 1
+            return document
+        document = parse_pdf(pdf.absolute_path, pdf.relative_path, record.sha256, self.config.pdf)
+        self.cache.save_document(document)
+        summary.parsed += 1
+        classes = ", ".join(f"{name}={count}" for name, count in (("text", document.stats.text_pages),
+                            ("mixed", document.stats.mixed_pages), ("scanned", document.stats.scanned_pages)) if count)
+        self.logger.info("Ayrıştırıldı: %s (%d sayfa: %s)", pdf.relative_path, document.stats.pages, classes)
+        return document
+
+    def _context(self, relative_path, sha256, status):
+        return RenderContext(source_path=relative_path, sha256=sha256, generated=self._now(), mode=self.config.mode,
+                             status=status.value, prompt_sha256=self.prompt.sha256, models={},
+                             front_matter=self.config.output.front_matter, page_markers=self.config.output.page_markers)
+
+    def _fail(self, relative_path, stage, message, summary):
+        self.state.update(relative_path, status=DocumentStatus.failed, error_stage=stage, error=message)
+        summary.failed += 1
+        self.logger.error("Başarısız [%s]: %s — %s", stage.value, relative_path, message)
+        self.events.on_document_end(relative_path, DocumentStatus.failed, [], None, error=message)

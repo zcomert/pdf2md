@@ -1,6 +1,6 @@
 # Faz 04 — Deterministik Tam Dönüşüm ve Batch Orkestrasyonu v1
 
-**İlgili bölümler:** §3.1, §7 (son not), §10.3, §16.3, §20.1–§20.3, §29 (temel)
+**İlgili bölümler:** §3.1, §7 (son not), §9.1, §9.3, §10.1, §10.3, §11.4, §16.3, §20.1–§20.3, §29 (temel)
 **Önkoşul:** Faz 03
 **Tahmini büyüklük:** Orta
 
@@ -10,86 +10,84 @@ Varsayılan prompt ile uçtan uca çalışan ilk kullanılabilir sürümü çık
 
 ## Modüller
 
-`src/markdown_builder.py`, `src/batch_processor.py`, `src/default_prompt.py`
+`src/default_prompt.py`, `src/markdown_builder.py`, `src/batch_processor.py`, `src/cli.py`
 
 ## Görevler
 
-### 1. Varsayılan prompt — `src/default_prompt.py`
+### 1. Prompt çözümleme — `src/default_prompt.py`
 
-- [ ] `DEFAULT_PROMPT` metni (tam yapısal dönüşüm isteği, belge dilini koru)
-- [ ] `DEFAULT_PLAN` — sabit plan nesnesi (Faz 08'deki plan şemasının ilk hali): `scope=document`, `requested_fields=["full_conversion"]`, `needs={tables, equations, figures, full_text: true}`, `output_language="source"`
-- [ ] `is_default_plan(plan)` — markdown builder'ın LLM'siz yolu seçmesi için
-- [ ] Prompt kaynağı çözümleme (§10.1, §10.3) şimdiden:
-  - Hiç prompt yok → varsayılan, INFO log
-  - Boş/boşluk prompt → varsayılan + belge uyarısı `empty_prompt`
-  - Dolu prompt → Faz 08'e kadar "henüz desteklenmiyor" hatası (çıkış kodu 2)
+- [x] `DEFAULT_PROMPT` (tam yapısal dönüşüm, belge dilini koru)
+- [x] `resolve_prompt(args, config) -> ResolvedPrompt(text, source, is_default, empty_prompt)` — öncelik `--prompt` > `--prompt-file` > config `prompt` > config `prompt_file` > varsayılan (§10.1). `merge_cli` CLI değerlerini config'e yazdığı için kaynak ayrımı `args` üzerinden yapılır
+- [x] Prompt yok → varsayılan, bilgi logu; boş/boşluk → varsayılan + belge uyarısı `empty_prompt` (§10.3)
+- [x] `prompt_sha256` verilen ham metinden: boş prompt ile prompt'suz çalıştırma farklı hash üretir, böylece birbirinin yerine atlanmaz ve durumlar doğru kalır
+- [x] Dolu prompt → Faz 08'e kadar `PreflightError` (çıkış 2): "Prompt tabanlı çıkarım henüz desteklenmiyor"
+- [x] Prompt dosyası okunamazsa `PreflightError`
+- [ ] `DEFAULT_PLAN` → plan şeması Faz 08'de tanımlanacağı için oraya ertelendi; Faz 04 yalnızca `is_default` bilgisini kullanır
 
 ### 2. Markdown üretici — `src/markdown_builder.py`
 
-- [ ] `build_full_conversion(doc: DocumentModel, ctx) -> str` — **saf ve deterministik** (aynı girdi → bayt bayt aynı çıktı; `generated` zaman damgası front matter'da olduğundan testlerde enjekte edilebilir saat kullanılır)
-- [ ] Front matter (§20.2) — `output.front_matter` açıksa; YAML güvenli yazım (`yaml.safe_dump`, alan sırası sabit)
-  - `models` bu fazda yalnızca kullanılan modeller (varsayılan promptta metin modeli yok; görsel model Faz 07'den sonra)
-- [ ] Bloklar `order`'a göre gezilir, `header_footer` atlanır
-- [ ] `heading` → `#` × seviye (en fazla 6)
-- [ ] `paragraph` → satır sonu tirelemesi birleştirilir (`exam-\nple` → `example`), tek satır sonları boşluğa çevrilir
-- [ ] `list` → `- ` veya `1. `
-- [ ] `table` / `equation` / `figure` → `ref_id` ile ilgili kayda bakılır; kayıt yoksa (Faz 05 öncesi) blok metni olduğu gibi yazılır
-- [ ] `algorithm` → fenced code block
-- [ ] `caption`, `footnote` → düz paragraf (dipnot için `> ` veya `[^n]` biçimi; basit tut)
-- [ ] Sayfa geçişlerinde `<!-- page: n -->` (`output.page_markers`)
-- [ ] Markdown özel karakter kaçışı: satır başındaki `#`, `>`, `-`, `1.` gibi yanlış yorumlanabilecek metinler kaçırılır; LaTeX içeriğine dokunulmaz
-- [ ] Parse hatalı sayfa için `<!-- page: n [parse_error] -->` ve uyarı
-- [ ] `[unreadable_page]` işareti (Faz 06–07'de dolacak) için yer tutucu desteği
+- [x] `build_full_conversion(document, ctx) -> str` — saf ve deterministik; üretim zamanı `RenderContext.generated` ile verilir
+- [x] Front matter (§20.2): `source`, `sha256`, `generated`, `mode`, `prompt_sha256`, `models`, `status`; `yaml.safe_dump`, sabit alan sırası; `output.front_matter` ile kapatılabilir
+- [x] Her sayfa için `<!-- page: n -->` (`output.page_markers`); ayrıştırma hatalı sayfa `<!-- page: n [parse_error] -->`
+- [x] **Okunamayan sayfa:** OCR/görsel model uygulanmamış `scanned` sayfa → `[unreadable_page]` (sayfa işaretleri kapalıyken de) ve `unreadable_page: page n` uyarısı (§11.4). Faz 06–07 bu sayfaları dolduracak
+- [x] `header_footer` ve `figure` blokları yazılmaz (şekiller Faz 05'te `assets/` ile)
+- [x] `heading` → `#` × seviye (1–6), harf aralıklı başlıklar normalize (`## ABSTRACT`)
+- [x] Paragraf, `caption`, `footnote`, `reference` → tek satırda yeniden akış (`reflow`)
+- [x] **Satır sonu tirelemesi:** satır tireyle bitiyor ve sonraki satır küçük harfle başlıyorsa kelime birleştirilir (`classifi-cation` → `classification`); **tireli biçim belgede başka yerde geçiyorsa tire korunur** (`pre-trained`); sonraki satır büyük harf/rakamla başlıyorsa tire korunur ve boşluk eklenmez (`Speaker-Dependent`, `1990-2000`); yumuşak tire (U+00AD) silinir
+- [x] `list` → madde başına bir satır: `•`/`-` vb. → `- `, `3)`/`3.` → `3. `, `(ii)`/`a)` → `- (ii) `; işaretsiz satırlar önceki maddenin devamı; ardışık liste blokları boş satırsız
+- [x] `algorithm` → ` ```text ` kod bloğu
+- [x] **Kaçış:** satır başında Markdown sözdizimi (`#`, `>`, `- `, `1. `, `---`, ` ``` `) → `\#`, `1\.`; HTML etiketi gibi yorumlanabilecek `<` (`<script`, `</`, `<!--`) → `&lt;` (PDF içeriği Markdown görüntüleyicide HTML olarak çalışmasın). `p<0.05` gibi ifadelere dokunulmaz
 
-### 3. Batch işlemcisi v1 — `src/batch_processor.py`
+### 3. Batch işlemcisi — `src/batch_processor.py`
 
-```text
-for pdf in discovered (deterministik sıra):
-    state → processing
-    try:
-        doc = cache.load_document(sha) or parse_pdf(...)
-        md  = build_full_conversion(doc, ctx)
-        atomic_write(output_path, md)
-        state → completed | completed_with_warnings
-    except DocumentError as e:
-        state → failed(error_stage, error)
-    except FatalBatchError:
-        state kaydet, döngüden çık
-```
+- [x] `BatchProcessor(config, state, cache, output_dir, run_id, logger, prompt, force, events, cancel_token, now)`; `run(discovery, summary)`
+- [x] Belge başına: `processing` + `attempts+1` → önbellek/ayrıştırma → uyarılar → Markdown → atomik yazım → `completed` / `completed_with_warnings` + `warnings`, `output_path`, `prompt_sha256`, `processed_at`, `processing_time_sec`, `models: {}`
+- [x] Çıktı yolları çalıştırma başında `resolve_output_paths` ile; state'te kayıtlı yollar (filtre dışı belgelerinki dahil) önce ayrılır
+- [x] **Olay arayüzü** (`BatchEvents`, Faz 13 GUI için): `on_run_start`, `on_document_start`, `on_stage` (`parse`, `write`), `on_document_end`, `on_run_end`. CLI `tqdm` ilerleme çubuğuna bağlar (TTY değilse gizlenir)
+- [x] **İptal/duraklatma** (`CancelToken`): `cancel`, `pause`, `resume`, `checkpoint`; belge başında, ayrıştırmadan sonra ve yazımdan önce kontrol edilir. İptal edilen belge `pending`'e döner (yarım dosya yok)
+- [x] CLI'da ilk Ctrl+C güvenli iptal, ikinci Ctrl+C hemen çıkış (`KeyboardInterrupt`; yarıda kalan kayıt sonraki çalıştırmada `recover_interrupted` ile kurtarılır); işleyici çalıştırma sonunda eski haline döner
+- [x] Atlama kuralı (Faz 04 hali, `decide`): durum tamamlanmış + aynı `prompt_sha256` + çıktı dosyası mevcut ve boş değil → atla; `failed` → `--retry-failed` yoksa denenmez; `--force` → her şey yeniden (önbellek de okunmaz)
+- [x] Prompt değişince önceki çıktı bilgisi `history`'ye eklenir (§9.3)
+- [x] Hatalar: `DocumentError` → aşamasıyla `failed`; `OSError` → `failed(write)`; beklenmeyen istisna traceback ile loglanır ve bulunduğu aşamayla `failed`; batch devam eder
+- [x] Çalıştırma özeti (§29) konsol + log + `runs[run_id]`: `toplam, completed, completed_with_warnings, failed, skipped, önceki hata nedeniyle denenmeyen, süre` ve ayrıştırma/önbellek sayıları
 
-- [ ] `BatchProcessor(config, state, cache, events)` sınıfı
-- [ ] **Olay/ilerleme arayüzü** (GUI için baştan, Faz 13): `events.on_document_start(rel_path)`, `on_stage(rel_path, stage)`, `on_document_end(rel_path, status, warnings)`, `on_run_end(summary)`. CLI uygulaması bunu `tqdm`'e bağlar
-- [ ] **İptal/duraklatma tokenı:** `CancelToken` (`threading.Event` tabanlı `cancel`, `pause`). Belgeler arasında ve aşamalar arasında kontrol edilir. CLI'da `Ctrl+C` → iptal tokenı → mevcut belgeyi yarım bırakmadan state kaydı ve çıkış
-- [ ] Uyarı toplama: belge uyarıları (`doc.warnings` + çalışma uyarıları) → `completed_with_warnings`
-- [ ] `processing_time_sec`, `attempts`, `last_run_id`, `output_path`, `prompt_sha256` state'e yazılır
-- [ ] Basit atlama (tam kural Faz 10'da): durum `completed*`, sha aynı, `prompt_sha256` aynı ve çıktı dosyası mevcut/boş değil → `skipped`
-- [ ] `--force` → önbellek okunmaz, atlama yok
-- [ ] Çalıştırma sonu özet: toplam/completed/warnings/failed/skipped + süre → konsol ve log (§29)
-- [ ] Çıkış kodu: herhangi `failed` → 1, değilse 0
+**Kararlar:**
 
-### 4. `assets/` kuralı
+- **`skipped` state'e yazılmaz.** Yazılsaydı §9.3'teki "durum `completed`/`completed_with_warnings` ise atla" koşulu bir sonraki çalıştırmada sağlanmaz ve belge gereksiz yeniden işlenirdi. `skipped` çalıştırma özetinde ve olaylarda raporlanır; kalıcı durum son gerçek işlem sonucudur (CSV'deki "son işlem durumu" ile de tutarlı)
+- **Uyarılı durum:** belgedeki her uyarı (`low_text_page`, `vector_text_suspected`, `unreadable_page`, `garbled_text`, `pdf_repaired`, `empty_prompt`…) `completed_with_warnings` yapar
+- **Çıkış kodları:** bu çalıştırmada başarısız olan belge varsa 1; önceki çalıştırmadan kalan ve denenmeyen `failed` kayıtları çıkış kodunu etkilemez (Faz 10'da yeniden değerlendirilecek); **iptal → 130** (§24'te tanımlı değil; kabuk geleneği 128 + SIGINT; gereksinim belgesine eklenmeli)
+- **Mod ve ayrıştırıcı sürümü atlama kuralına henüz girmez;** `parse_config_hash`/`parser_version` değişince önbellek yenilenir ama tamamlanmış belgeler `--force` olmadan yeniden yazılmaz. Plan hash'i Faz 08–10'da eklenecek
 
-- [ ] Bu fazda görsel referans yok → `assets/` **oluşturulmaz** (§6.2). Kopyalama mantığı Faz 05'te.
+### 4. `assets/`
+
+- [x] Görsel referans yok → `assets/` oluşturulmaz (§6.2); belge klasöründe yalnızca `.md` bulunur
+
+### Faz 03'e geri dönük iyileştirmeler (gerçek çıktı incelemesinden)
+
+- **Damga satırlı vektör metin sayfası:** Shilaskar s.1'de sayfaya özgü IEEE damgası gövde metnini 115 karaktere çıkarıp sayfayı `text` gösteriyor ve makalenin ilk sayfası sessizce kayboluyordu. ≥1000 çizim ve <500 karakter gövde de `vector_text_suspected` sayılır (logo yoğun Vekkot s.1: 3867 çizim, 3457 karakter → etkilenmez)
+- **IEEE alt başlıkları** (`A. EARLY STUDIES`, 9 pt, gövde 10 pt): harf numarası tamamı büyük harf başlıkla da kabul edilir; numaralı başlıklarda küçük font cezası uygulanmaz. Diğer 8 makalede başlık listesi değişmedi
+
+## Bilinen Sınırlamalar
+
+- Tablolar satır satır paragraf olarak yazılır (Faz 05)
+- Formüller, şekiller yok (Faz 05, 07)
+- Taranmış/vektör metin sayfaları `[unreadable_page]` (Faz 06–07)
+- Blok sınırını aşan tireleme (`times-` / `tamp`, liste maddesi ile sonraki paragraf arasında) birleştirilmez
+- Elsevier ilk sayfasındaki "Article info / Abstract" kutusunun sırası karışabilir (Faz 03 bilinen durum)
 
 ## Testler
 
-- Deterministiklik: aynı `document.json` iki kez → aynı Markdown (sabit saat ile)
-- `synthetic_single_column.pdf` için beklenen Markdown'ın "golden file" karşılaştırması (`tests/golden/`)
-- Başlık seviyeleri, listeler, sayfa işaretleri, üst/alt bilginin çıkarılması
-- `page_markers: false` ve `front_matter: false` seçenekleri
-- Entegrasyon: fixture klasöründe tam çalıştırma
-  - Aynı adlı iki PDF (kök + `subdir/`) çıktıları çakışmaz (§38 kriter 3)
-  - Bozuk/şifreli `failed`, diğerleri `completed*`, çıkış kodu 1
-  - Belge klasöründe `.md` dışında içerik dosyası yok (§38 kriter 2)
-  - İkinci çalıştırmada tümü `skipped`
-  - Boş prompt (`--prompt "  "`) → `completed_with_warnings` (§38 kriter 6)
-- Giriş klasörü önce/sonra hash'leri aynı (§38 kriter 17)
+- [x] `test_markdown_builder.py` — **golden file** (`tests/golden/synthetic_single_column.md`; `UPDATE_GOLDEN=1` ile güncellenir), determinizm, front matter alanları (YAML olarak) ve kapatma, sayfa işaretleri ve `[parse_error]`, okunamayan sayfa, blok türleri (başlık seviyeleri, harf aralıklı başlık, tireleme, liste türleri, sıkı liste, caption, algoritma, kaynakça, `header_footer`/`figure` atlanması), paragraf kaçışı ve HTML etiketi, `reflow` tablosu, belge içi tireli kelime dağarcığı
+- [x] `test_default_prompt.py` — varsayılan, boş prompt uyarısı ve farklı hash, öncelik sırası, özel prompt, okunamayan dosya
+- [x] `test_batch_processor.py` — `decide` tablosu, boş çıktı dosyası atlanmaz, `CancelToken` (duraklat/devam/iptal), olay sırası ve durum alanları, **belge ortasında iptal → `pending` ve devam eden çalıştırmada tamamlanma**, prompt değişiminde `history` ve önbellek kullanımı, silinen çıktının yeniden üretilmesi, yazım hatası → `failed(write)` ve batch devamı, `front_matter`/`page_markers` kapatma
+- [x] `test_cli_batch.py` — uçtan uca: her geçerli PDF için `.md`, **belge klasöründe yalnızca `.md`** (§38 kriter 2), **aynı adlı PDF'ler çakışmaz** (kriter 3), **metin LLM'i yok** (`models: {}`, kriter 4), **boş prompt → uyarılı** (kriter 6), açılamayanlar `failed(parse)` (kriter 11), `document.json` şema (kriter 23), giriş klasörü değişmez (kriter 17), ikinci çalıştırma atlar ve çıkış 0, özel prompt → çıkış 2 ve çıktı klasörü oluşmaz, `--force`, `--retry-failed`, içeriği değişen PDF yeniden üretilir, **iptal → çıkış 130, kilit bırakılır, devam eden çalıştırma kalanı işler**
+- [x] Faz 00/02 CLI testleri yeni davranışa göre güncellendi
 
 ## Tamamlanma Kriterleri
 
-- [ ] `.venv\Scripts\python.exe process_papers.py tests\fixtures --recursive` ile her geçerli PDF için okunabilir bir `A.md` üretilir
-- [ ] Gerçek makalelerden en az ikisinin çıktısı elle incelenmiş, başlık/paragraf/sıra hataları not edilmiş ve kritik olanları düzeltilmiş
-- [ ] §38 kriterleri 1, 2, 3, 4 (LLM çağrısı yok), 6, 11, 17 bu kapsamda karşılanıyor
-- [ ] `pytest` yeşil
+- [x] `.venv\Scripts\python.exe process_papers.py tests\fixtures --recursive` ile her geçerli PDF için okunabilir bir `A.md` üretilir (17 dosya, ~4 sn)
+- [x] Gerçek makalelerden en az ikisinin çıktısı elle incelendi (Pokorny, Rahman, Vekkot, Berardi); kritik hatalar (IEEE alt başlıkları, vektör metinli ilk sayfa, sayı aralığı tirelemesi) düzeltildi, kalanlar "Bilinen Sınırlamalar"da
+- [x] §38 kriterleri 1, 2, 3, 4, 6, 11, 17 otomatik testlerle karşılanıyor
+- [x] `pytest` yeşil (288 geçti, 1 atlandı — Tesseract kurulu değil)
 
-> **Kilometre taşı:** Aşama 1 tamamlandı. Bu noktada commit + etiket (`v0.1-asama1`) önerilir.
+> **Kilometre taşı:** Aşama 1 tamamlandı. Commit + etiket (`v0.1-asama1`) önerilir.

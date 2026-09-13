@@ -19,8 +19,20 @@ def new_run_id(now=None):
     return (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
 
 def log_file_name(run_id):
-    stamp = datetime.strptime(run_id, "%Y%m%d-%H%M%S")
-    return f"process_{stamp:%Y-%m-%d_%H%M%S}.log"
+    """`20260913-143012` → `process_2026-09-13_143012.log`; çakışma eki korunur (`-2` → `..._143012-2.log`)."""
+    base, suffix = run_id[:15], run_id[15:]
+    stamp = datetime.strptime(base, "%Y%m%d-%H%M%S")
+    return f"process_{stamp:%Y-%m-%d_%H%M%S}{suffix}.log"
+
+
+def unique_run_id(base_run_id, output_dir, existing_run_ids=()):
+    """Aynı saniyede başlayan çalıştırmaların log dosyası ve state kaydı birbirini ezmesin."""
+    logs = Path(output_dir) / "logs"
+    candidate, counter = base_run_id, 1
+    while candidate in existing_run_ids or (logs / log_file_name(candidate)).exists():
+        counter += 1
+        candidate = f"{base_run_id}-{counter}"
+    return candidate
 
 def setup_logging(output_dir=None, level="INFO", run_id=None):
     """Konsol loglamasını kurar. `output_dir` verilirse dosya handler'ı da eklenir;

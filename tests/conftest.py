@@ -85,7 +85,7 @@ def _ignore_non_pdf(directory, names):
     for name in names:
         path = Path(directory) / name
         if path.is_dir():
-            if name in {"__pycache__", "reference"}:
+            if name in {"__pycache__", "reference", "real"}:
                 ignored.add(name)
         elif path.suffix.lower() not in PDF_SUFFIXES:
             ignored.add(name)
@@ -94,7 +94,8 @@ def _ignore_non_pdf(directory, names):
 
 @pytest.fixture
 def tmp_input_copy(tmp_path):
-    """Fixture PDF'lerini (alt klasörler dahil) geçici bir giriş klasörüne kopyalar."""
+    """Sentetik fixture PDF'lerini (alt klasörler dahil) geçici bir giriş klasörüne kopyalar.
+    Gerçek makaleler (`real/`) büyük olduğu için kopyalanmaz; gerekirse `fixtures_dir / "real"` doğrudan kullanılır."""
     target = tmp_path / "input"
     shutil.copytree(FIXTURES_DIR, target, ignore=_ignore_non_pdf)
     return target
