@@ -1,7 +1,10 @@
 from pathlib import Path
 from typing import Literal
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from .errors import PreflightError
+
+DEFAULT_CONFIG_PATH = Path("config.yaml")
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -48,7 +51,7 @@ class SummaryConfig(StrictModel):
     extra_fields: list[str] = []
 
 class LoggingConfig(StrictModel):
-    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_model_content: bool = False
 
 class AppConfig(StrictModel):
@@ -69,16 +72,67 @@ class AppConfig(StrictModel):
     summary: SummaryConfig = SummaryConfig()
     logging: LoggingConfig = LoggingConfig()
 
+# CLI argüman adı -> config içindeki yol (§24 tablosu)
+CLI_TO_CONFIG = {
+    "input_dir": ("input_dir",),
+    "output_dir": ("output_dir",),
+    "mode": ("mode",),
+    "scope": ("scope",),
+    "recursive": ("recursive",),
+    "include": ("include",),
+    "prompt": ("prompt",),
+    "prompt_file": ("prompt_file",),
+    "model_vision": ("models", "vision"),
+    "model_text": ("models", "text"),
+    "dpi": ("pdf", "render_dpi"),
+    "cpu_workers": ("processing", "cpu_workers"),
+    "retry_failed": ("processing", "retry_failed"),
+    "log_level": ("logging", "level"),
+}
+
 def load_config(path=None):
-    chosen = Path(path) if path else Path("config.yaml")
-    data = yaml.safe_load(chosen.read_text(encoding="utf-8")) if chosen.exists() else {}
-    return AppConfig.model_validate(data or {})
+    """`path` açıkça verildiyse dosya bulunmalıdır; verilmediyse ./config.yaml varsa okunur."""
+    if path is not None:
+        chosen = Path(path)
+        if not chosen.is_file():
+            raise PreflightError(f"Yapılandırma dosyası bulunamadı: {chosen}",
+                                 "--config ile geçerli bir dosya yolu verin")
+    elif DEFAULT_CONFIG_PATH.is_file():
+        chosen = DEFAULT_CONFIG_PATH
+    else:
+        return AppConfig()
+    try:
+        data = yaml.safe_load(chosen.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise PreflightError(f"{chosen} geçerli bir YAML dosyası değil: {exc}") from exc
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise PreflightError(f"{chosen} en üst düzeyde anahtar/değer eşlemesi içermelidir")
+    try:
+        return AppConfig.model_validate(data)
+    except ValidationError as exc:
+        raise PreflightError(f"{chosen} geçersiz:\n{format_validation_error(exc)}") from exc
 
 def merge_cli(config, args):
-    updates = {}
-    for key in ("input_dir", "output_dir", "mode", "recursive", "scope", "prompt", "prompt_file"):
-        value = getattr(args, key, None)
-        if value is not None: updates[key] = value
-    if getattr(args, "include", None): updates["include"] = args.include
-    return config.model_copy(update=updates)
+    """Öncelik: CLI > config.yaml > varsayılan. Sonuç yeniden doğrulanır."""
+    data = config.model_dump()
+    for attr, path in CLI_TO_CONFIG.items():
+        value = getattr(args, attr, None)
+        if value is None:
+            continue
+        target = data
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    try:
+        return AppConfig.model_validate(data)
+    except ValidationError as exc:
+        raise PreflightError(f"Geçersiz komut satırı değeri:\n{format_validation_error(exc)}") from exc
 
+def format_validation_error(exc):
+    lines = []
+    for err in exc.errors():
+        location = ".".join(str(part) for part in err["loc"]) or "(kök)"
+        lines.append(f"  - {location}: {err['msg']}")
+    return "\n".join(lines)
