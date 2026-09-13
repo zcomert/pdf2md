@@ -4,7 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-DOCUMENT_SCHEMA_VERSION = "1.0"
+DOCUMENT_SCHEMA_VERSION = "1.1"
 
 BBox = tuple[float, float, float, float]
 
@@ -106,12 +106,15 @@ class Table(StrictModel):
     id: str
     number: str | None = None
     caption: str | None = None
+    caption_block_id: str | None = None
     page: int
     bbox: BBox
     cells: list[list[str | None]] = []
     merged_cells: list[TableCellSpan] = []
     markdown: str | None = None
     html: str | None = None
+    raw_text: str | None = Field(None, description="Bölgedeki metin, satır yapısı korunarak (hücreler güvenilir değilken)")
+    cache_path: str | None = Field(None, description="Hücreleri çıkarılamayan tablonun bölge görüntüsü (_cache/<sha>/ altına göre)")
     source_method: SourceMethod = SourceMethod.text
     consistent: bool | None = None
 
@@ -133,11 +136,34 @@ class Figure(StrictModel):
     id: str
     number: str | None = None
     caption: str | None = None
+    caption_block_id: str | None = None
     page: int
     bbox: BBox
-    cache_path: str | None = None
+    cache_path: str | None = Field(None, description="_cache/<sha>/ altına göre görsel yolu")
+    image_xref: int | None = Field(None, description="Bölge tek bir gömülü görsele karşılık geliyorsa xref; değilse render edilir")
     referenced_by: list[str] = []
     source_method: SourceMethod = SourceMethod.text
+
+
+class CandidateKind(str, Enum):
+    table = "table"
+    equation = "equation"
+    figure = "figure"
+    algorithm = "algorithm"
+
+
+class Candidate(StrictModel):
+    """Tablo/formül/şekil/algoritma adayı (§12.2). Görsel model çağrısı kararı Faz 07'de moda göre verilir."""
+    id: str
+    kind: CandidateKind
+    page: int
+    bbox: BBox
+    reasons: list[str] = []
+    number: str | None = None
+    caption_block_id: str | None = None
+    ref_id: str | None = None
+    needs_vision: bool = False
+    vision_trigger: str | None = None
 
 
 class DocumentWarning(StrictModel):
@@ -179,6 +205,7 @@ class DocumentModel(StrictModel):
     tables: list[Table] = []
     equations: list[Equation] = []
     figures: list[Figure] = []
+    candidates: list[Candidate] = []
     warnings: list[DocumentWarning] = []
     stats: DocumentStats = DocumentStats()
 

@@ -10,11 +10,15 @@ import re
 import fitz
 
 from . import PARSER_VERSION
-from .document_model import (Block, BlockType, DocumentModel, DocumentSource, DocumentStats, DocumentWarning,
-                             Line, Page, PageClass, Section)
+from .document_model import (Block, BlockType, Candidate, CandidateKind, DocumentModel, DocumentSource,
+                             DocumentStats, DocumentWarning, Equation, Figure, Line, Page, PageClass, Section, Table)
 from .errors import DocumentError, ErrorStage
-from .layout_analyzer import (NUMBERING_RE, RawBlock, RawLine, classify_blocks, detect_gutter, document_gutter,
-                              gutter_fits, mark_header_footer, normalize_heading_text, order_page, split_by_style)
+from .layout_analyzer import (NUMBERING_RE, RawBlock, RawLine, body_font_size, classify_blocks, detect_gutter,
+                              document_gutter, gutter_fits, mark_header_footer, normalize_heading_text, order_page,
+                              split_by_style)
+from .paths import safe_filename
+from .table_extractor import to_html, to_markdown
+from .visual_detector import detect_page_visuals
 from .page_classifier import DRAWING_COUNT_CHAR_LIMIT, classify_page, image_area_ratio
 
 # Ligatürler açılır (ﬁ → fi), boşluklar korunur, sayfa dışı metin atılır. Görseller `dict` çıktısına
@@ -23,6 +27,9 @@ TEXT_FLAGS = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP
 INVISIBLE_CHARS = re.compile("[​‌‍⁠﻿]")
 BOLD_FONT_RE = re.compile(r"bold|black|heavy|semibold|demibold|[-,]bd\b", re.I)
 ITALIC_FONT_RE = re.compile(r"italic|oblique|[-,]it\b", re.I)
+# Matematik fontları (§12.2): TeX (CMMI, CMSY, CMEX, MSBM), Cambria Math, STIX, MathType, Symbol
+MATH_FONT_RE = re.compile(r"^(?:CM(?:MI|SY|EX|BSY)|MSBM|MSAM|EUFM|RSFS|CambriaMath|Cambria-Math|STIX|MT(?:MI|SY|EX)|Symbol|"
+                          r"TimesNewRoman.*Italic.*Math|.*Math)", re.I)
 GARBLED_RATIO = 0.05
 
 
@@ -65,14 +72,14 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
     for page in doc:
         number = page.number + 1
         info = {"number": number, "width": page.rect.width, "height": page.rect.height, "blocks": [],
-                "error": None, "image_ratio": 0.0, "drawing_count": None, "garbled": False}
+                "error": None, "image_ratio": 0.0, "drawing_count": None, "garbled": False, "images": []}
         try:
             blocks, char_count, garbled = _extract_blocks(page, number)
-            images = [tuple(image["bbox"]) for image in page.get_image_info()]
-            blocks.extend(RawBlock(number, image_bbox, is_image=True) for image_bbox in images
-                          if image_bbox[2] > image_bbox[0] and image_bbox[3] > image_bbox[1])
-            info.update(blocks=blocks, char_count=char_count, garbled=garbled,
-                        image_ratio=image_area_ratio(images, page.rect.width, page.rect.height))
+            images = page.get_image_info(xrefs=True)
+            boxes = [tuple(image["bbox"]) for image in images]
+            blocks.extend(RawBlock(number, box, is_image=True) for box in boxes if box[2] > box[0] and box[3] > box[1])
+            info.update(blocks=blocks, char_count=char_count, garbled=garbled, images=images,
+                        image_ratio=image_area_ratio(boxes, page.rect.width, page.rect.height))
             if char_count < DRAWING_COUNT_CHAR_LIMIT:
                 info["drawing_count"] = len(page.get_cdrawings())
         except Exception as exc:  # tek sayfa hatası belgeyi durdurmaz (§28)
@@ -81,6 +88,24 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
         raw_pages.append(info)
 
     mark_header_footer([(p["number"], p["width"], p["height"], p["blocks"]) for p in raw_pages])
+    body_size = body_font_size([b for p in raw_pages for b in p["blocks"]])
+
+    # Sayfa sınıfı okuma sırasından bağımsızdır; taranmış sayfalarda görsel tespit yapılmaz (Faz 06–07).
+    page_visuals = {}
+    for info in raw_pages:
+        body_chars = sum(b.chars for b in info["blocks"] if b.type != BlockType.header_footer and not b.is_image)
+        info["body_chars"] = body_chars
+        info["class"], info["codes"] = (PageClass.text, []) if info["error"] else classify_page(
+            body_chars, info["image_ratio"], info["drawing_count"], pdf_config)
+        if info["error"] or info["class"] == PageClass.scanned:
+            continue
+        try:
+            page = doc[info["number"] - 1]
+            gutter = detect_gutter(info["blocks"], info["width"])
+            info["blocks"], page_visuals[info["number"]] = detect_page_visuals(
+                page, info["number"], info["blocks"], body_size, gutter, images=info["images"])
+        except Exception as exc:  # görsel tespit hatası sayfanın metnini kaybettirmemeli
+            warnings.append(DocumentWarning(code="visual_detection_error", page=info["number"], message=str(exc)))
 
     page_gutters = [detect_gutter(info["blocks"], info["width"]) for info in raw_pages]
     shared_gutter = document_gutter(page_gutters, raw_pages[0]["width"])
@@ -89,14 +114,12 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
         if gutter is None and shared_gutter is not None and gutter_fits(info["blocks"], info["width"], shared_gutter):
             gutter = shared_gutter
         ordered, columns, gutter, uncertain = order_page(info["blocks"], info["width"], info["height"], gutter)
-        body_chars = sum(b.chars for b in ordered if b.type != BlockType.header_footer and not b.is_image)
-        page_class, codes = (PageClass.text, []) if info["error"] else classify_page(
-            body_chars, info["image_ratio"], info["drawing_count"], pdf_config)
+        codes = info["codes"]
         warnings.extend(DocumentWarning(code=code, page=info["number"]) for code in codes)
         if info["garbled"]:
             warnings.append(DocumentWarning(code="garbled_text", page=info["number"]))
-        pages.append(Page(number=info["number"], width=info["width"], height=info["height"], page_class=page_class,
-                          char_count=info["char_count"], body_char_count=body_chars,
+        pages.append(Page(number=info["number"], width=info["width"], height=info["height"], page_class=info["class"],
+                          char_count=info["char_count"], body_char_count=info["body_chars"],
                           text_block_count=sum(1 for b in ordered if not b.is_image),
                           image_area_ratio=info["image_ratio"], drawing_count=info["drawing_count"],
                           columns=columns, gutter_x=gutter, reading_order_uncertain=uncertain,
@@ -105,15 +128,135 @@ def _parse_document(doc, relative_path, sha256, pdf_config):
 
     metadata = {key: value.strip() for key, value in (doc.metadata or {}).items() if isinstance(value, str) and value.strip()}
     title = classify_blocks(ordered_pages, raw_pages[0]["height"], metadata)
-    blocks = _to_blocks(ordered_pages)
+    blocks, block_ids = _to_blocks(ordered_pages)
+    sections = build_sections(blocks)
+    tables, equations, figures, candidates = _visual_models(page_visuals, block_ids, blocks, sections)
     stats = DocumentStats(pages=len(pages),
                           text_pages=sum(p.page_class == PageClass.text for p in pages),
                           mixed_pages=sum(p.page_class == PageClass.mixed for p in pages),
                           scanned_pages=sum(p.page_class == PageClass.scanned for p in pages))
     return DocumentModel(parser_version=PARSER_VERSION, parse_config_hash=parse_config_hash(pdf_config),
                          source=DocumentSource(relative_path=relative_path, sha256=sha256, page_count=doc.page_count),
-                         pdf_metadata=metadata, title=title, pages=pages, blocks=blocks,
-                         sections=build_sections(blocks), warnings=warnings, stats=stats)
+                         pdf_metadata=metadata, title=title, pages=pages, blocks=blocks, sections=sections,
+                         tables=tables, equations=equations, figures=figures, candidates=candidates,
+                         warnings=warnings, stats=stats)
+
+
+def _visual_models(page_visuals, block_ids, blocks, sections):
+    """Tespit edilen öğeleri şema modellerine çevirir; blokların `ref_id` alanlarını bağlar."""
+    by_id = {block.id: block for block in blocks}
+    tables, equations, figures, candidates = [], [], [], []
+    figure_names, table_names = set(), set()
+    for number in sorted(page_visuals):
+        visuals = page_visuals[number]
+        for element in visuals.tables:
+            table_id = f"table-{len(tables) + 1}"
+            block_id = block_ids.get(id(element.block))
+            caption_id = block_ids.get(id(element.caption)) if element.caption else None
+            cache_path = None
+            if not element.consistent:
+                cache_path = "tables/" + _unique_name("table", element.number, number, len(tables) + 1, table_names) + ".png"
+            markdown = html = None
+            if element.consistent:
+                if element.merged:
+                    html = to_html(element.rows, element.merged)
+                else:
+                    markdown = to_markdown(element.rows)
+            tables.append(Table(id=table_id, number=element.number, caption=_caption_text(by_id, caption_id),
+                                caption_block_id=caption_id, page=number, bbox=_round_bbox(element.bbox),
+                                cells=element.rows if element.consistent else [], merged_cells=element.merged,
+                                markdown=markdown, html=html, raw_text=element.raw_text, cache_path=cache_path,
+                                consistent=element.consistent))
+            _link(by_id, block_id, table_id)
+            candidates.append(Candidate(id=f"cand-{len(candidates) + 1}", kind=CandidateKind.table, page=number,
+                                        bbox=_round_bbox(element.bbox), reasons=element.reasons, number=element.number,
+                                        caption_block_id=caption_id, ref_id=table_id, needs_vision=not element.consistent,
+                                        vision_trigger=None if element.consistent else "table_inconsistent"))
+        for element in visuals.equations:
+            equation_id = f"eq-{len(equations) + 1}"
+            block_id = block_ids.get(id(element.block))
+            block = by_id.get(block_id)
+            equations.append(Equation(id=equation_id, number=element.number, raw_text=element.raw_text, page=number,
+                                      section=_section_title(sections, block.order) if block else None,
+                                      bbox=_round_bbox(element.bbox)))
+            _link(by_id, block_id, equation_id)
+            candidates.append(Candidate(id=f"cand-{len(candidates) + 1}", kind=CandidateKind.equation, page=number,
+                                        bbox=_round_bbox(element.bbox), reasons=element.reasons, number=element.number,
+                                        ref_id=equation_id, needs_vision=True, vision_trigger="equation_requested"))
+        for element in visuals.figures:
+            figure_id = f"fig-{len(figures) + 1}"
+            block_id = block_ids.get(id(element.block))
+            caption_id = block_ids.get(id(element.caption)) if element.caption else None
+            name = _unique_name("figure", element.number, number, len(figures) + 1, figure_names)
+            figures.append(Figure(id=figure_id, number=element.number, caption=_caption_text(by_id, caption_id),
+                                  caption_block_id=caption_id, page=number, bbox=_round_bbox(element.bbox),
+                                  cache_path=f"figures/{name}.png", image_xref=element.xref,
+                                  referenced_by=figure_references(blocks, element.number)))
+            _link(by_id, block_id, figure_id)
+            candidates.append(Candidate(id=f"cand-{len(candidates) + 1}", kind=CandidateKind.figure, page=number,
+                                        bbox=_round_bbox(element.bbox), reasons=element.reasons, number=element.number,
+                                        caption_block_id=caption_id, ref_id=figure_id, needs_vision=False,
+                                        vision_trigger="figure_requested"))
+    return tables, equations, figures, candidates
+
+
+def _link(by_id, block_id, ref_id):
+    if block_id in by_id:
+        by_id[block_id].ref_id = ref_id
+
+
+def _caption_text(by_id, caption_id):
+    block = by_id.get(caption_id)
+    return " ".join(block.text.split()) if block else None
+
+
+def _unique_name(prefix, number, page, index, used):
+    if number and number.isdigit():
+        base = f"{prefix}_{int(number):02d}"
+    elif number:
+        base = f"{prefix}_{safe_filename(number)}"
+    else:
+        base = f"{prefix}_p{page}_{index}"
+    name, suffix = base, 2
+    while name in used:
+        name = f"{base}_{suffix}"
+        suffix += 1
+    used.add(name)
+    return name
+
+
+def _section_title(sections, order):
+    containing = [s for s in sections if s.start_order <= order <= s.end_order]
+    return max(containing, key=lambda s: s.level).title if containing else None
+
+
+FIGURE_REFERENCE_RE = re.compile(r"\b(?:Fig(?:ure)?s?\.?|FIGURES?|FIGS?\.|Şekil(?:ler)?)\s*((?:\d+[a-z]?(?:\s*(?:,|and|ve|&|–|-)\s*)?)+)")
+
+
+def figure_references(blocks, number):
+    """Metinde şekle atıf yapan paragraf/liste bloklarının kimlikleri ("Fig. 3", "Figs. 2 and 3", "Figures 2–4")."""
+    if not number or not number[:1].isdigit():
+        return []
+    target = int(re.match(r"\d+", number).group())
+    result = []
+    for block in blocks:
+        if block.type not in (BlockType.paragraph, BlockType.list):
+            continue
+        for match in FIGURE_REFERENCE_RE.finditer(block.text.replace("\n", " ")):
+            if target in _expand_numbers(match.group(1)):
+                result.append(block.id)
+                break
+    return result
+
+
+def _expand_numbers(text):
+    numbers = set()
+    for start, end in re.findall(r"(\d+)(?:\s*[–-]\s*(\d+))?", text):
+        low = int(start)
+        high = int(end) if end else low
+        if high >= low and high - low <= 50:
+            numbers.update(range(low, high + 1))
+    return numbers
 
 
 def _extract_blocks(page, number):
@@ -130,7 +273,7 @@ def _extract_blocks(page, number):
             text = INVISIBLE_CHARS.sub("", "".join(s["text"] for s in spans))
             if not text.strip():
                 continue
-            chars = bold_chars = italic_chars = 0
+            chars = bold_chars = italic_chars = math_chars = 0
             sizes, fonts = {}, {}
             for span in spans:
                 span_chars = len(INVISIBLE_CHARS.sub("", span["text"]).strip()) or 0
@@ -140,13 +283,14 @@ def _extract_blocks(page, number):
                 chars += span_chars
                 bold_chars += span_chars if bold else 0
                 italic_chars += span_chars if italic else 0
+                math_chars += span_chars if MATH_FONT_RE.match(font) else 0
                 sizes[round(span["size"], 1)] = sizes.get(round(span["size"], 1), 0) + span_chars + 0.001
                 fonts[font] = fonts.get(font, 0) + span_chars + 0.001
             direction = raw_line.get("dir", (1, 0))
             lines.append(RawLine(text=text, bbox=tuple(raw_line["bbox"]), font=max(fonts, key=fonts.get),
                                  size=max(sizes, key=sizes.get), bold=chars > 0 and bold_chars / chars >= 0.8,
                                  italic=chars > 0 and italic_chars / chars >= 0.8, chars=chars,
-                                 bold_chars=bold_chars, vertical=abs(direction[0]) < 0.5))
+                                 bold_chars=bold_chars, vertical=abs(direction[0]) < 0.5, math_chars=math_chars))
             char_count += len(re.sub(r"\s", "", text))
             replacement_chars += text.count("�")
         if lines:
@@ -157,7 +301,8 @@ def _extract_blocks(page, number):
 
 
 def _to_blocks(ordered_pages):
-    blocks, order = [], 0
+    """Döner: (bloklar, ham blok nesne kimliği → blok kimliği)."""
+    blocks, block_ids, order = [], {}, 0
     for number, raw_blocks in ordered_pages:
         for index, raw in enumerate(raw_blocks, start=1):
             text = raw.text if not raw.is_image else ""
@@ -169,8 +314,9 @@ def _to_blocks(ordered_pages):
                 italic=raw.italic if raw.lines else False,
                 heading_level=raw.heading_level if raw.type == BlockType.heading else None,
                 order=order, column=raw.column))
+            block_ids[id(raw)] = blocks[-1].id
             order += 1
-    return blocks
+    return blocks, block_ids
 
 
 def _round_bbox(bbox):

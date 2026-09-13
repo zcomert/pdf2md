@@ -179,3 +179,69 @@ def test_real_vector_text_pages(fixtures_dir, parsed):
     assert [p.page_class for p in doc.pages] == [PageClass.scanned] * 6
     assert all(p.vector_text_suspected for p in doc.pages)
     assert any(b.type == BlockType.header_footer for b in doc.blocks)
+
+
+# --- Faz 05: tablo, formül, şekil ---
+
+def test_synthetic_visual_elements(synthetic_pdf, parsed):
+    doc = parsed(synthetic_pdf("synthetic_table_equation.pdf"))
+    expected = EXPECTED["synthetic_table_equation.pdf"]
+    assert len(doc.tables) == 1
+    table = doc.tables[0]
+    assert table.consistent and table.cells == expected["table"] and table.caption == expected["table_caption"]
+    assert table.markdown.startswith("| Model | Accuracy | F1 |") and table.cache_path is None
+    assert [(e.number, e.raw_text) for e in doc.equations] == [
+        (eq["number"], f"{eq['text']}  ({eq['number']})") for eq in expected["equations"]]
+    assert all(e.section == expected["title"] for e in doc.equations)
+    figure = doc.figures[0]
+    assert (figure.number, figure.caption, figure.cache_path) == ("1", expected["figure_caption"], "figures/figure_01.png")
+    assert figure.image_xref
+    refs = {b.ref_id: b.type for b in doc.blocks if b.ref_id}
+    assert refs == {"table-1": BlockType.table, "eq-1": BlockType.equation, "eq-2": BlockType.equation,
+                    "fig-1": BlockType.figure}
+    # tablo hücreleri ve formül numaraları ayrı paragraf olarak kalmaz
+    paragraphs = [b.text for b in doc.blocks if b.type == BlockType.paragraph]
+    assert not any("Bi-GRU" in text or text.strip() == "(1)" for text in paragraphs)
+    kinds = sorted(c.kind.value for c in doc.candidates)
+    assert kinds == ["equation", "equation", "figure", "table"]
+    assert [c.vision_trigger for c in doc.candidates if c.kind.value == "equation"] == ["equation_requested"] * 2
+
+
+def test_two_column_table_block_in_reading_order(synthetic_pdf, parsed):
+    doc = parsed(synthetic_pdf("synthetic_two_column.pdf"))
+    order = [b.type.value if b.type != BlockType.paragraph else b.text.split()[0] for b in doc.blocks]
+    assert order.index("caption") < order.index("table") < order.index("LEFT-BOTTOM")
+    assert not doc.pages[0].reading_order_uncertain
+
+
+def test_real_ruled_tables_are_structured(fixtures_dir, parsed):
+    doc = parsed(real(fixtures_dir, "2025_Berardi_Voice.pdf"))
+    assert [(t.number, t.consistent) for t in doc.tables] == [(str(n), True) for n in range(1, 7)]
+    assert len(doc.tables[5].cells) == 21
+
+
+def test_real_booktabs_tables_found_by_caption(fixtures_dir, parsed):
+    doc = parsed(real(fixtures_dir, "2024_Imran_Designing.pdf"))
+    assert [t.number for t in doc.tables] == [str(n) for n in range(1, 9)]
+    assert all(not t.consistent and t.cache_path and t.raw_text for t in doc.tables)
+    table6 = next(t for t in doc.tables if t.number == "6")
+    assert "Sampling" in table6.raw_text and "Du et al. (2021)" in table6.raw_text
+
+
+def test_real_vector_drawn_tables_and_grouped_figure_panels(fixtures_dir, parsed):
+    doc = parsed(real(fixtures_dir, "2025_Vekkot_Continuous.pdf"))
+    assert {"4", "5", "6"} <= {t.number for t in doc.tables}
+    assert all(f.number for f in doc.figures), "başlıksız panel şekilleri kalmamalı"
+    figure7 = next(f for f in doc.figures if f.number == "7")
+    assert figure7.bbox[1] < 100 and figure7.image_xref is None  # (a)(b)(c) panelleri tek şekil
+
+
+def test_real_reference_numbers_not_equations(fixtures_dir, parsed):
+    doc = parsed(real(fixtures_dir, "2024_Lambay_Machine.pdf"))
+    assert doc.equations == []
+
+
+def test_real_equation_numbers_do_not_cross_columns(fixtures_dir, parsed):
+    doc = parsed(real(fixtures_dir, "2024_Pokorny_VocDoc.pdf"))
+    equation5 = next(e for e in doc.equations if e.number == "5")
+    assert "(1)" not in equation5.raw_text.replace("(5)", "")

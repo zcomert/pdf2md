@@ -21,6 +21,7 @@ class RawLine:
     chars: int
     bold_chars: int
     vertical: bool = False
+    math_chars: int = 0
 
 
 @dataclass
@@ -33,6 +34,7 @@ class RawBlock:
     column: int | None = None
     heading_level: int | None = None
     heading_number: str | None = None
+    ref_id: str | None = None
 
     @property
     def text(self):
@@ -63,6 +65,15 @@ class RawBlock:
     @property
     def width(self):
         return self.bbox[2] - self.bbox[0]
+
+
+# Görsel tespitinde (Faz 05) okuma sırasından önce türü belirlenen bloklar
+VISUAL_TYPES = (BlockType.table, BlockType.equation, BlockType.figure, BlockType.algorithm)
+
+
+def is_flow_text(block):
+    """Okuma akışındaki metin bloğu: görsel, üst/alt bilgi, tablo, formül veya şekil değil."""
+    return not block.is_image and block.type not in (BlockType.header_footer, *VISUAL_TYPES)
 
 
 def _dominant(lines, attribute):
@@ -108,7 +119,7 @@ def column_lines(blocks, page_width):
     """Sütun tespitinde kullanılan satırlar: sayfa genişliğinin %25–48'i. Daha kısa satırlar (tablo
     hücreleri, paragraf son satırları, şekil etiketleri) sütun boşluğunu yanıltıcı biçimde keser."""
     low, high = COLUMN_LINE_WIDTH[0] * page_width, COLUMN_LINE_WIDTH[1] * page_width
-    return [line for block in blocks if not block.is_image and block.type != BlockType.header_footer
+    return [line for block in blocks if is_flow_text(block)
             for line in block.lines
             if not line.vertical and len(line.text.strip()) >= 3 and low <= line.bbox[2] - line.bbox[0] < high]
 
@@ -211,7 +222,7 @@ def order_page(blocks, page_width, page_height, gutter=None):
             separators.append(block)
             # Ortalanmış tek satırlık başlık/şekil başlığı sütun boşluğunu doğal olarak keser; belirsizlik
             # yalnızca dar ama çok satırlı bir metin bloğu iki sütuna taştığında vardır.
-            if not block.is_image and len(block.lines) >= 2 and block.width < FULL_WIDTH_RATIO * content_width:
+            if is_flow_text(block) and len(block.lines) >= 2 and block.width < FULL_WIDTH_RATIO * content_width:
                 uncertain = True
     separators.sort(key=_position_key)
     bands = defaultdict(lambda: ([], []))
@@ -251,7 +262,7 @@ def merge_indented_first_lines(ordered):
 
 
 def _is_body_text(block):
-    return not block.is_image and block.type != BlockType.header_footer and bool(block.lines)
+    return is_flow_text(block) and bool(block.lines)
 
 
 def _position_key(block):
@@ -351,7 +362,7 @@ def comparable(text):
 def body_font_size(blocks):
     weights = Counter()
     for block in blocks:
-        if block.is_image or block.type == BlockType.header_footer:
+        if not is_flow_text(block):
             continue
         for line in block.lines:
             weights[round(line.size * 2) / 2] += line.chars
@@ -416,6 +427,8 @@ def classify_blocks(pages_blocks, first_page_height, metadata=None):
     body_size = body_font_size(ordered)
     candidates = []
     for block in ordered:
+        if block.type in VISUAL_TYPES:
+            continue
         if block.is_image:
             block.type = BlockType.figure
             continue
@@ -469,7 +482,7 @@ def _drop_front_matter(candidates):
 
 def _detect_title(ordered, body_size, page_height, metadata):
     first_page = [b for b in ordered if b.page == 1 and not b.is_image
-                  and b.type not in (BlockType.header_footer, BlockType.caption)
+                  and b.type not in (BlockType.header_footer, BlockType.caption, *VISUAL_TYPES)
                   and b.text.strip() and b.bbox[1] < 0.5 * page_height]
     if not first_page:
         return []
@@ -500,7 +513,7 @@ def _detect_title(ordered, body_size, page_height, metadata):
     if max_size < body_size + 1.5:
         return []
     # Sonraki sayfalarda aynı boyutta metin varsa (ör. her sayfadaki bölüm başlıkları) bu bir belge başlığı değildir.
-    later = [b.size for b in ordered if b.page > 1 and not b.is_image and b.type != BlockType.header_footer
+    later = [b.size for b in ordered if b.page > 1 and is_flow_text(b)
              and b.text.strip() and len(b.lines) <= 3]
     if later and max_size < max(later) + 0.5:
         return []

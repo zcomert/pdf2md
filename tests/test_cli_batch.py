@@ -27,8 +27,13 @@ def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys):
         assert record["status"] in ("completed", "completed_with_warnings")
         markdown = tmp_output / record["output_path"]
         assert markdown.read_text(encoding="utf-8").startswith("---\n")
-        # §38 kriter 2: belge klasöründe .md dışında içerik dosyası yok (assets henüz yok)
-        assert [p.name for p in markdown.parent.iterdir()] == [markdown.name]
+        # §38 kriter 2: belge klasöründe .md dışında içerik dosyası yok (assets/ görselleri hariç)
+        assert {p.name for p in markdown.parent.iterdir()} <= {markdown.name, "assets"}
+        text = markdown.read_text(encoding="utf-8")
+        assets_dir = markdown.parent / "assets"
+        if assets_dir.exists():
+            files = [p.relative_to(markdown.parent).as_posix() for p in assets_dir.rglob("*") if p.is_file()]
+            assert files and all(f"]({name})" in text for name in files)  # yalnızca referans verilen görseller
         DocumentModel.model_validate_json((tmp_output / "_cache" / record["sha256"] / "document.json").read_text(encoding="utf-8"))
     # §38 kriter 3: aynı adlı iki PDF çakışmaz
     assert (tmp_output / "synthetic_single_column" / "synthetic_single_column.md").is_file()
@@ -42,6 +47,19 @@ def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys):
     run_record = next(iter(state["runs"].values()))
     assert (run_record["completed"], run_record["failed"]) == (7, 3)
     assert input_snapshot(tmp_input_copy) == before  # §38 kriter 17
+
+
+def test_tables_equations_and_figures_in_markdown(tmp_input_copy, tmp_output):
+    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_table_equation.pdf", "--include", "synthetic_single_column.pdf") == EXIT_OK
+    folder = tmp_output / "synthetic_table_equation"
+    markdown = (folder / "synthetic_table_equation.md").read_text(encoding="utf-8")
+    assert "| Model | Accuracy | F1 |\n|---|---:|---:|\n| Bi-LSTM | 0.99 | 0.98 |" in markdown
+    assert "z = (x - mu) / s  (1)" in markdown and "[latex_unavailable]" in markdown
+    assert "![Figure 1. Proposed pipeline](assets/figures/figure_01.png)" in markdown
+    assert (folder / "assets" / "figures" / "figure_01.png").read_bytes().startswith(b"\x89PNG")
+    assert markdown.count("Bi-GRU") == 1  # tablo hücreleri paragraf olarak tekrar yazılmaz
+    # görsel referansı olmayan belgede assets/ oluşmaz (§6.2)
+    assert not (tmp_output / "synthetic_single_column" / "assets").exists()
 
 
 def test_no_text_llm_in_full_conversion(tmp_input_copy, tmp_output):

@@ -5,8 +5,9 @@ import pytest
 import yaml
 
 from src.config import PdfConfig
-from src.document_model import Block, BlockType, DocumentModel, DocumentSource, Page, PageClass
-from src.markdown_builder import RenderContext, build_full_conversion, reflow, unreadable_pages
+from src.document_model import (Block, BlockType, DocumentModel, DocumentSource, Equation, Figure, Page, PageClass,
+                                 Table, TableCellSpan)
+from src.markdown_builder import RenderContext, build_full_conversion, reflow, render_full_conversion, unreadable_pages
 from src.pdf_parser import parse_pdf
 from tests.helpers import sha256_file
 
@@ -136,3 +137,67 @@ def test_hyphenated_vocabulary_comes_from_document():
               make_block(1, BlockType.paragraph, "The pre-\ntrained weights and classifi-\ncation.")]
     markdown = build_full_conversion(make_document(blocks), context(front_matter=False, page_markers=False))
     assert "The pre-trained weights and classification." in markdown
+
+
+# --- tablo, formül, şekil (Faz 05) ---
+
+def visual_document(tables=(), equations=(), figures=(), blocks=()):
+    document = make_document(list(blocks))
+    return document.model_copy(update={"tables": list(tables), "equations": list(equations), "figures": list(figures)})
+
+
+def ref_block(index, block_type, ref_id, text=""):
+    block = make_block(index, block_type, text)
+    block.ref_id = ref_id
+    return block
+
+
+def plain(**overrides):
+    return context(front_matter=False, page_markers=False, **overrides)
+
+
+def test_consistent_table_renders_markdown_or_html():
+    table = Table(id="table-1", page=1, bbox=(0, 0, 1, 1), markdown="| a | b |\n|---|---|\n| 1 | 2 |", consistent=True)
+    html_table = Table(id="table-2", page=1, bbox=(0, 0, 1, 1), html="<table></table>", consistent=True,
+                       merged_cells=[TableCellSpan(row=0, col=0, colspan=2)])
+    document = visual_document(tables=[table, html_table], blocks=[ref_block(0, BlockType.table, "table-1", "a b 1 2"),
+                                                                     ref_block(1, BlockType.table, "table-2", "x")])
+    assert build_full_conversion(document, plain()) == "| a | b |\n|---|---|\n| 1 | 2 |\n\n<table></table>\n"
+
+
+def test_unstructured_table_renders_image_raw_text_and_marker():
+    table = Table(id="table-1", number="6", caption="Table 6 Signals", page=1, bbox=(0, 0, 1, 1),
+                  raw_text="Rate  Channels\n128  14", cache_path="tables/table_06.png", consistent=False)
+    document = visual_document(tables=[table], blocks=[ref_block(0, BlockType.table, "table-1")])
+    markdown, assets = render_full_conversion(document, plain(available_assets=frozenset({"table-1"})))
+    assert markdown == ("![Table 6 Signals](assets/tables/table_06.png)\n\n```text\nRate  Channels\n128  14\n```\n\n"
+                        "[table_structure_unavailable]\n")
+    assert assets == ["tables/table_06.png"]
+    markdown, assets = render_full_conversion(document, plain())
+    assert "![" not in markdown and assets == []
+
+
+def test_equation_rendering():
+    raw = Equation(id="eq-1", number="1", raw_text="z = (x - mu) / s  (1)", page=1, bbox=(0, 0, 1, 1))
+    latex = Equation(id="eq-2", number="2", latex="z = \frac{x-\mu}{s}", latex_valid=False, page=1, bbox=(0, 0, 1, 1))
+    document = visual_document(equations=[raw, latex], blocks=[ref_block(0, BlockType.equation, "eq-1"),
+                                                                ref_block(1, BlockType.equation, "eq-2")])
+    assert build_full_conversion(document, plain()) == (
+        "```text\nz = (x - mu) / s  (1)\n```\n\n[latex_unavailable]\n\n$$\nz = \frac{x-\mu}{s}\n$$ [latex_unverified]\n")
+
+
+def test_figure_rendering_and_unavailable_marker():
+    figure = Figure(id="fig-1", number="3", caption="Fig. 3. A [draft] pipeline", page=1, bbox=(0, 0, 1, 1),
+                    cache_path="figures/figure_03.png")
+    document = visual_document(figures=[figure], blocks=[ref_block(0, BlockType.figure, "fig-1"),
+                                                         make_block(1, BlockType.figure, "")])
+    markdown, assets = render_full_conversion(document, plain(available_assets=frozenset({"fig-1"})))
+    assert markdown == "![Fig. 3. A (draft) pipeline](assets/figures/figure_03.png)\n"
+    assert assets == ["figures/figure_03.png"]
+    assert build_full_conversion(document, plain()) == "[figure_unavailable]\n"
+
+
+def test_fence_longer_than_backticks_in_content():
+    table = Table(id="table-1", page=1, bbox=(0, 0, 1, 1), raw_text="a ``` b", consistent=False)
+    document = visual_document(tables=[table], blocks=[ref_block(0, BlockType.table, "table-1")])
+    assert build_full_conversion(document, plain()).startswith("````text\na ``` b\n````")

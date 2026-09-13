@@ -9,7 +9,9 @@ from datetime import datetime
 
 from .atomic_io import atomic_write_text
 from .errors import DocumentError, ErrorStage
-from .markdown_builder import RenderContext, build_full_conversion, unreadable_pages
+from .assets import sync_assets
+from .figure_extractor import materialize_assets
+from .markdown_builder import RenderContext, render_full_conversion, unreadable_pages
 from .paths import ensure_under_output, resolve_output_paths
 from .pdf_parser import parse_config_hash, parse_pdf
 from .schemas import DocumentStatus, HistoryEntry
@@ -154,15 +156,27 @@ class BatchProcessor:
             document = self._load_or_parse(pdf, record, summary)
             self.cancel_token.checkpoint()
 
+            self.events.on_stage(rel, "assets")
+            doc_cache_dir = self.cache.doc_dir(record.sha256)
+            assets = materialize_assets(pdf.absolute_path, document, doc_cache_dir, self.config.pdf.render_dpi,
+                                        self.config.pdf.crop_padding_pt, overwrite=self.force)
+            for item_id, page_number, error in assets.failed:
+                self.logger.warning("Görsel çıkarılamadı [%s, s.%d]: %s — %s", item_id, page_number, rel, error)
+            self.cancel_token.checkpoint()
+
             stage = ErrorStage.write
             self.events.on_stage(rel, "write")
             warnings = [str(w) for w in document.warnings] + list(self.prompt.run_warnings)
+            warnings += sorted({f"asset_extraction_failed: page {page_number}" for _, page_number, _ in assets.failed})
             warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
                          if f"unreadable_page: page {n}" not in warnings]
             status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
-            markdown = build_full_conversion(document, self._context(rel, record.sha256, status))
+            markdown, referenced = render_full_conversion(document, self._context(rel, record.sha256, status,
+                                                                                   frozenset(assets.available)))
             target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
             self.cancel_token.checkpoint()
+            # Görseller Markdown'dan önce yazılır: Markdown hiçbir zaman olmayan bir görsele referans vermez.
+            sync_assets(target.parent, doc_cache_dir, referenced)
             atomic_write_text(target, markdown)
         except Cancelled:
             self.state.update(rel, status=DocumentStatus.pending)
@@ -204,10 +218,11 @@ class BatchProcessor:
         self.logger.info("Ayrıştırıldı: %s (%d sayfa: %s)", pdf.relative_path, document.stats.pages, classes)
         return document
 
-    def _context(self, relative_path, sha256, status):
+    def _context(self, relative_path, sha256, status, available_assets=frozenset()):
         return RenderContext(source_path=relative_path, sha256=sha256, generated=self._now(), mode=self.config.mode,
                              status=status.value, prompt_sha256=self.prompt.sha256, models={},
-                             front_matter=self.config.output.front_matter, page_markers=self.config.output.page_markers)
+                             front_matter=self.config.output.front_matter, page_markers=self.config.output.page_markers,
+                             available_assets=available_assets)
 
     def _fail(self, relative_path, stage, message, summary):
         self.state.update(relative_path, status=DocumentStatus.failed, error_stage=stage, error=message)
