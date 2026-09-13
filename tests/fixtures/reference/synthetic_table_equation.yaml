@@ -1,0 +1,35 @@
+# Sentetik PDF için referans veri. Şema örneği ve Faz 14 ölçüm aracının hızlı testi için kullanılır.
+source: synthetic_table_equation.pdf
+sha256: "e3094914550317c87ff8e08445a850b39761baade32db2c4342886262a7c8ff8"
+kind: synthetic
+bibliographic:
+  title: "Tables Equations and Figures"
+  authors: ["Fixture Author", "Second Author"]
+  year: null
+  venue: null
+  doi: null
+tables:
+  - number: "1"
+    page: 1
+    caption: "Table 1. Classification results"
+    header: ["Model", "Accuracy", "F1"]
+    rows:
+      - ["Bi-LSTM", "0.99", "0.98"]
+      - ["Bi-GRU", "0.96", "0.95"]
+      - ["SVM", "0.91", "0.90"]
+equations:
+  - number: "1"
+    page: 1
+    latex: "z = \\frac{x - \\mu}{s}"
+    description: null
+  - number: "2"
+    page: 1
+    latex: "\\mathrm{SPL} = 20 \\log\\left(\\frac{p}{p_{\\mathrm{ref}}}\\right)"
+    description: null
+results:
+  - {model: "Bi-LSTM", metric: "accuracy", value: 0.99, page: 1, table: "Table 1"}
+  - {model: "Bi-LSTM", metric: "f1", value: 0.98, page: 1, table: "Table 1"}
+  - {model: "Bi-GRU", metric: "accuracy", value: 0.96, page: 1, table: "Table 1"}
+  - {model: "Bi-GRU", metric: "f1", value: 0.95, page: 1, table: "Table 1"}
+  - {model: "SVM", metric: "accuracy", value: 0.91, page: 1, table: "Table 1"}
+  - {model: "SVM", metric: "f1", value: 0.90, page: 1, table: "Table 1"}

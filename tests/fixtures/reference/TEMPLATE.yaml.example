@@ -1,0 +1,31 @@
+# Gerçek makale referans şablonu. Kopyalayıp <makale_adı>.yaml olarak kaydedin.
+# Şema: tests/reference_schema.py — kind: real için en az 2 tablo, 3 formül, 5 sonuç gerekir.
+# SHA-256: .venv\Scripts\python.exe -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" tests\fixtures\real\paper_a.pdf
+source: real/paper_a.pdf
+sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+kind: real
+bibliographic:
+  title: "..."
+  authors: ["...", "..."]
+  year: 2023
+  venue: "..."
+  doi: "10.xxxx/..."       # yoksa null
+tables:                     # en az 2; hücreler PDF'de göründüğü gibi metin olarak
+  - number: "3"
+    page: 7                 # PDF sayfa numarası (1 tabanlı), dergi sayfa numarası değil
+    caption: "Table 3. ..."
+    header: ["Model", "Accuracy", "F1"]
+    rows:
+      - ["Bi-LSTM", "0.99", "0.99"]
+equations:                  # en az 3
+  - number: "1"
+    page: 4
+    latex: "z = \\frac{x-\\mu}{s}"
+    description: null       # yalnızca PDF'de formülün yanında açıkça yazıyorsa
+results:                    # en az 5; yalnızca PDF'de birebir geçen değerler
+  - model: "Bi-LSTM"
+    metric: "accuracy"
+    value: 0.99
+    page: 15
+    table: "Table 9"        # metinden geliyorsa null
+    dataset: null

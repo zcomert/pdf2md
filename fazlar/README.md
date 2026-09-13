@@ -51,6 +51,7 @@ Gereksinim belgesinde tam netleşmemiş ve ilgili fazda karar verilmesi gereken 
 | Konu | İlgili Faz | Öneri |
 |---|---|---|
 | §11.2 sınıflandırma tablosu, "az metin + düşük görsel oranı" (ör. boş sayfa) durumunu kapsamıyor | 03 | `text` sınıfı + `low_text_page` uyarısı |
+| §11.2 metni vektör yol olarak çizilmiş sayfaları (ör. "Print To PDF" çıktıları) `text` sayar; OCR tetiklenmez, içerik kaybolur. Gerçek set: `2025_Shilaskar_Intelligent.pdf` | 03, 06 | Görünür alanı kaplayan yoğun vektör çizim + düşük karakter sayısı → `scanned` gibi ele al (render + OCR/görsel model) ve `vector_text_suspected` uyarısı |
 | §16.3 / §38.2-4 "varsayılan promptta metin LLM'i çağrılmaz" ile §22.3 "künye için her belgede kısa LLM çağrısı" çelişiyor | 11 | Künye LLM çağrısını tam dönüşümden ayrı say; yalnızca metadata+regex ile eksik kalan alan varsa ve Ollama erişilebilirse yap. Kabul kriteri 4'ü "içerik üretimi için LLM çağrılmaz" olarak yorumla. Karar belgeye işlenmeli |
 | §33 `src/` düz modül yapısı paket adı içermiyor | 00 | `src/` altında `__init__.py` ile paket; `process_papers.py` kökten `from src.cli import main` |
 | GUI teknolojisi belirtilmemiş | 13 | Ek bağımlılık gerektirmeyen `tkinter` (ttk). Daha modern görünüm istenirse `PySide6` |

@@ -97,7 +97,7 @@ Sonraki fazların ihtiyaçları baştan düşünülerek tanımlanır (şema sür
 
 ## Testler
 
-- `synthetic_single_column.pdf`: başlık hiyerarşisi beklenenle aynı (`1. Introduction` seviye 1, `2.1 Dataset` seviye 2), liste bloğu tespit edilir
+- `synthetic_single_column.pdf`: başlık hiyerarşisi `tests/fixtures/generate_fixtures.py` → `EXPECTED` ile aynı (makale başlığı seviye 1, `1. Introduction` seviye 2, `2.1 Dataset` seviye 3), liste bloğu tespit edilir
 - `synthetic_two_column.pdf`: blok sırası sol sütun → sağ sütun; tam genişlik tablo doğru dikey konumda
 - `synthetic_header_footer.pdf`: tekrarlanan metinler `header_footer`
 - `synthetic_scanned.pdf`: sayfa sınıfı `scanned`
