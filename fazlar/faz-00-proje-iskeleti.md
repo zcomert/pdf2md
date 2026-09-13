@@ -12,12 +12,12 @@ Sonraki tüm fazların üzerine inşa edileceği proje yapısını, sanal ortam�
 
 ### 1. Ortam ve depo
 
-- [ ] `python -m venv .venv` ile sanal ortam oluştur
-- [ ] `.gitignore`: `.venv/`, `__pycache__/`, `.pytest_cache/`, `*.pyc`, `tests/output/`, `tests/_tmp/`, `*_output/`
-- [ ] `requirements.txt`: `pymupdf`, `ollama`, `pydantic`, `pyyaml`, `pandas`, `tqdm`, `pillow`, `pylatexenc`
-- [ ] `requirements-optional.txt` (veya README'de not): `openpyxl`, `rich`
-- [ ] `requirements-dev.txt`: `-r requirements.txt` + `pytest`
-- [ ] Paketleri kurduktan sonra `pip freeze` çıktısından **sabit sürümleri** (`==`) `requirements.txt`'e yaz (§34.2)
+- [x] `python -m venv .venv` ile sanal ortam oluştur
+- [x] `.gitignore`: `.venv/`, `__pycache__/`, `.pytest_cache/`, `*.pyc`, `tests/output/`, `tests/_tmp/`, `*_output/`
+- [x] `requirements.txt`: `pymupdf`, `ollama`, `pydantic`, `pyyaml`, `pandas`, `tqdm`, `pillow`, `pylatexenc`
+- [x] `requirements-optional.txt` (veya README'de not): `openpyxl`, `rich`
+- [x] `requirements-dev.txt`: `-r requirements.txt` + `pytest`
+- [x] Paketleri kurduktan sonra sabit sürümleri (`==`) `requirements.txt`'e yaz (§34.2)
 
 ### 2. Klasör yapısı
 
@@ -96,8 +96,8 @@ Hata aşamaları (§22.2 `error_stage`) ve sistem geneli/belge özgü ayrımı (
 
 ## Tamamlanma Kriterleri
 
-- [ ] `.venv\Scripts\python.exe -m pip install -r requirements-dev.txt` temiz ortamda çalışır
-- [ ] `.venv\Scripts\python.exe process_papers.py --help` tüm §24 seçeneklerini gösterir
-- [ ] Geçersiz `config.yaml` anlaşılır hata mesajıyla sonlanır
-- [ ] `pytest` yeşil
-- [ ] `.venv` ve cache dosyaları `git status`'ta görünmez (§38 kriter 28)
+- [x] `.venv\Scripts\python.exe -m pip install -r requirements-dev.txt` temiz ortamda çalışır
+- [x] `.venv\Scripts\python.exe process_papers.py --help` tüm §24 seçeneklerini gösterir
+- [x] Geçersiz `config.yaml` anlaşılır hata mesajıyla sonlanır
+- [x] `pytest` yeşil (5 test geçti)
+- [x] `.venv` ve cache dosyaları `git status`'ta görünmez (§38 kriter 28)

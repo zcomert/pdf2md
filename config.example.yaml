@@ -1,0 +1,46 @@
+input_dir: "D:/papers"
+output_dir: "D:/papers_output"
+mode: balanced
+scope: auto
+recursive: false
+include: []
+prompt: null
+prompt_file: null
+ollama:
+  endpoint: "http://127.0.0.1:11434"
+  timeout_sec: 300
+  max_retries: 3
+  retry_backoff_sec: 5
+  keep_alive: "10m"
+models:
+  vision: "minicpm-v4.5:8b"
+  text: "gemma4:latest"
+  text_num_ctx: 16384
+  max_output_tokens: 4096
+  vision_required: true
+pdf:
+  render_dpi: 250
+  crop_padding_pt: 8
+  min_text_chars: 100
+  mixed_image_ratio: 0.3
+  scanned_image_ratio: 0.5
+ocr:
+  enabled: true
+  languages: ["eng"]
+  tesseract_path: null
+processing:
+  retry_failed: false
+  cpu_workers: 4
+  llm_workers: 1
+  min_free_disk_mb: 1024
+output:
+  front_matter: true
+  page_markers: true
+  citation_style: "(s. {page}{table_or_figure})"
+  save_xlsx: false
+summary:
+  extra_fields: []
+logging:
+  level: INFO
+  log_model_content: false
+
