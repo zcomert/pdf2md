@@ -8,13 +8,17 @@ import time
 from datetime import datetime
 
 from .atomic_io import atomic_write_text
-from .errors import DocumentError, ErrorStage
+from .document_model import DocumentWarning
+from .errors import DocumentError, ErrorStage, FatalBatchError
+from .model_clients import ModelUnavailable
+from .vision_enrichment import apply_vision_results, run_vision_jobs
+from .vision_triggers import select_vision_jobs
 from .assets import sync_assets
 from .figure_extractor import materialize_assets
 from .markdown_builder import RenderContext, render_full_conversion, unreadable_pages
 from .paths import ensure_under_output, resolve_output_paths
 from .pdf_parser import parse_config_hash, parse_pdf
-from .schemas import DocumentStatus, HistoryEntry
+from .schemas import DocumentStatus, HistoryEntry, ModelRef
 
 COMPLETED_STATUSES = {DocumentStatus.completed, DocumentStatus.completed_with_warnings}
 
@@ -101,7 +105,7 @@ def _non_empty(path):
 
 class BatchProcessor:
     def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
-                 events=None, cancel_token=None, now=None, ocr_settings=None):
+                 events=None, cancel_token=None, now=None, ocr_settings=None, vision=None):
         self.config = config
         self.state = state
         self.cache = cache
@@ -115,6 +119,7 @@ class BatchProcessor:
         self._now = now or (lambda: datetime.now().isoformat(timespec="seconds"))
         self._config_hash = parse_config_hash(config.pdf)
         self.ocr_settings = ocr_settings
+        self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
 
     def run(self, discovery, summary):
         """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled` yayılır;
@@ -157,6 +162,11 @@ class BatchProcessor:
             document = self._load_or_parse(pdf, record, summary)
             self.cancel_token.checkpoint()
 
+            stage = ErrorStage.vision
+            self.events.on_stage(rel, "vision")
+            document, vision_warnings, vision_model = self._enrich_with_vision(pdf, record, document, summary)
+            self.cancel_token.checkpoint()
+
             self.events.on_stage(rel, "assets")
             doc_cache_dir = self.cache.doc_dir(record.sha256)
             assets = materialize_assets(pdf.absolute_path, document, doc_cache_dir, self.config.pdf.render_dpi,
@@ -167,19 +177,21 @@ class BatchProcessor:
 
             stage = ErrorStage.write
             self.events.on_stage(rel, "write")
-            warnings = [str(w) for w in document.warnings] + list(self.prompt.run_warnings)
+            warnings = [str(w) for w in document.warnings] + vision_warnings + list(self.prompt.run_warnings)
             warnings += sorted({f"asset_extraction_failed: page {page_number}" for _, page_number, _ in assets.failed})
             warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
                          if f"unreadable_page: page {n}" not in warnings]
             status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+            models = {"vision": vision_model.reference} if vision_model else {}
             markdown, referenced = render_full_conversion(document, self._context(rel, record.sha256, status,
-                                                                                   frozenset(assets.available)))
+                                                                                   frozenset(assets.available), models))
             target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
             self.cancel_token.checkpoint()
             # Görseller Markdown'dan önce yazılır: Markdown hiçbir zaman olmayan bir görsele referans vermez.
             sync_assets(target.parent, doc_cache_dir, referenced)
             atomic_write_text(target, markdown)
-        except Cancelled:
+        except (Cancelled, FatalBatchError):
+            # Belgenin kendisinde sorun yok (iptal veya model servisi kapandı): sonraki çalıştırmada işlenir.
             self.state.update(rel, status=DocumentStatus.pending)
             raise
         except DocumentError as exc:
@@ -198,7 +210,8 @@ class BatchProcessor:
         elapsed = round(time.monotonic() - started, 2)
         self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
                           prompt_sha256=self.prompt.sha256, processed_at=self._now(), processing_time_sec=elapsed,
-                          error_stage=None, error=None, models={}, history=history)
+                          error_stage=None, error=None, history=history,
+                          models={"vision": ModelRef(name=vision_model.name, digest=vision_model.digest)} if vision_model else {})
         if status == DocumentStatus.completed:
             summary.completed += 1
         else:
@@ -221,9 +234,35 @@ class BatchProcessor:
         self.logger.info("Ayrıştırıldı: %s (%d sayfa: %s%s)", pdf.relative_path, document.stats.pages, classes, ocr)
         return document
 
-    def _context(self, relative_path, sha256, status, available_assets=frozenset()):
+    def _enrich_with_vision(self, pdf, record, document, summary):
+        """§12.3 tetikleyicilerine göre görsel model işleri. Döner: (belge, uyarı metinleri, kullanılan model veya None).
+        Model servisi kapanırsa `FatalBatchError` (§28: batch durur)."""
+        failed_ocr = {w.page for w in document.warnings if w.code in ("ocr_failed", "ocr_empty")}
+        jobs = select_vision_jobs(document, self.config.mode, None, failed_ocr)
+        if not jobs:
+            return document, [], None
+        if self.vision is None:
+            warning = DocumentWarning(code="vision_unavailable", message=f"{len(jobs)} görsel iş çalıştırılamadı")
+            return document, [str(warning)], None
+        sha = record.sha256
+        cache_path = self.cache.doc_dir(sha) / "vision" / f"{self.vision.info.digest[:12]}.json"
+        try:
+            run = run_vision_jobs(pdf.absolute_path, jobs, self.vision.client, cache_path, self.cache.model_raw_dir(sha),
+                                  self.cache.errors_dir(sha), self.config.pdf.render_dpi, self.config.pdf.crop_padding_pt,
+                                  force=self.force, checkpoint=self.cancel_token.checkpoint)
+        except ModelUnavailable as exc:
+            raise FatalBatchError(ErrorStage.vision, str(exc)) from exc
+        summary.vision_calls += run.calls
+        document, warnings, applied = apply_vision_results(document, jobs, run)
+        if run.unavailable:
+            warnings.append(DocumentWarning(code="vision_unavailable", message="görsel model bulunamadı"))
+        self.logger.info("Görsel model: %s — %d iş, %d önbellekten, %d çağrı, %d başarısız", pdf.relative_path,
+                         len(jobs), run.from_cache, run.calls, len(run.failures))
+        return document, [str(w) for w in warnings], (self.vision.info if applied else None)
+
+    def _context(self, relative_path, sha256, status, available_assets=frozenset(), models=None):
         return RenderContext(source_path=relative_path, sha256=sha256, generated=self._now(), mode=self.config.mode,
-                             status=status.value, prompt_sha256=self.prompt.sha256, models={},
+                             status=status.value, prompt_sha256=self.prompt.sha256, models=models or {},
                              front_matter=self.config.output.front_matter, page_markers=self.config.output.page_markers,
                              available_assets=available_assets)
 

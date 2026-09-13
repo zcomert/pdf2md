@@ -81,6 +81,7 @@ class Page(StrictModel):
     reading_order_uncertain: bool = False
     vector_text_suspected: bool = False
     ocr_applied: bool = False
+    vision_applied: bool = False
     parse_error: str | None = None
 
 
@@ -141,6 +142,7 @@ class Figure(StrictModel):
     bbox: BBox
     cache_path: str | None = Field(None, description="_cache/<sha>/ altına göre görsel yolu")
     image_xref: int | None = Field(None, description="Bölge tek bir gömülü görsele karşılık geliyorsa xref; değilse render edilir")
+    figure_type: str | None = Field(None, description="Görsel modelin sınıflandırması (chart, diagram, photo…)")
     referenced_by: list[str] = []
     source_method: SourceMethod = SourceMethod.text
 

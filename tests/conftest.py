@@ -113,3 +113,13 @@ def no_ocr_config(tmp_path):
 def tmp_output(tmp_path):
     """Giriş klasörünün dışında, henüz oluşturulmamış çıktı klasörü yolu."""
     return tmp_path / "output"
+
+
+@pytest.fixture(autouse=True)
+def fake_model_backend(request, monkeypatch):
+    """CLI testleri gerçek Ollama'ya bağlanmaz; `requires_ollama` işaretli testler gerçek arka ucu kullanır."""
+    from tests.fakes import FakeBackend
+    backend = FakeBackend()
+    if request.node.get_closest_marker("requires_ollama") is None:
+        monkeypatch.setattr("src.cli.create_model_backend", lambda config, logger: backend)
+    return backend

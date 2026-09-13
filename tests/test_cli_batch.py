@@ -5,6 +5,7 @@ import pytest
 from src.batch_processor import BatchEvents, CancelToken
 from src.cli import EXIT_CANCELLED, EXIT_DOC_FAILED, EXIT_OK, EXIT_PREFLIGHT, main
 from src.document_model import DocumentModel
+from tests.fakes import FAKE_LATEX, FAKE_PAGE_TEXT
 from tests.helpers import input_snapshot
 
 UNOPENABLE = {"corrupt.pdf", "not_a_pdf.PDF", "synthetic_encrypted.pdf"}
@@ -40,11 +41,12 @@ def test_full_conversion_end_to_end(tmp_input_copy, tmp_output, capsys, no_ocr_c
     # §38 kriter 3: aynı adlı iki PDF çakışmaz
     assert (tmp_output / "synthetic_single_column" / "synthetic_single_column.md").is_file()
     assert (tmp_output / "subdir" / "synthetic_single_column" / "synthetic_single_column.md").is_file()
-    # OCR kapalıyken taranmış sayfa içeriği çıkarılamaz: işaretli ve uyarılı
+    # OCR kapalıyken taranmış sayfa görsel modelle okunur (§11.4, §12.3 scanned_no_ocr); OCR eksikliği uyarı olarak kalır
     scanned = state["documents"]["synthetic_scanned.pdf"]
-    assert scanned["status"] == "completed_with_warnings"
-    assert {"ocr_unavailable: page 1", "unreadable_page: page 1"} <= set(scanned["warnings"])
-    assert "[unreadable_page]" in (tmp_output / scanned["output_path"]).read_text(encoding="utf-8")
+    assert scanned["status"] == "completed_with_warnings" and scanned["warnings"] == ["ocr_unavailable: page 1"]
+    scanned_markdown = (tmp_output / scanned["output_path"]).read_text(encoding="utf-8")
+    assert FAKE_PAGE_TEXT in scanned_markdown and "[unreadable_page]" not in scanned_markdown
+    assert scanned["models"]["vision"]["name"] == "minicpm-v4.5:8b"
     output = capsys.readouterr().out
     assert "completed 7, completed_with_warnings 1, failed 3, skipped 0" in output
     assert "Ayrıştırma: 7 ayrıştırıldı, 1 önbellekten." in output
@@ -58,7 +60,9 @@ def test_tables_equations_and_figures_in_markdown(tmp_input_copy, tmp_output):
     folder = tmp_output / "synthetic_table_equation"
     markdown = (folder / "synthetic_table_equation.md").read_text(encoding="utf-8")
     assert "| Model | Accuracy | F1 |\n|---|---:|---:|\n| Bi-LSTM | 0.99 | 0.98 |" in markdown
-    assert "z = (x - mu) / s  (1)" in markdown and "[latex_unavailable]" in markdown
+    # BALANCED: formüller görsel modelle LaTeX'e çevrilir (§12.3 equation_requested)
+    assert f"$$\n{FAKE_LATEX}\n$$" in markdown and "[latex_unavailable]" not in markdown
+    assert "minicpm-v4.5:8b@sha256:" in markdown.split("---")[1]  # front matter'da görsel model ve digest'i
     assert "![Figure 1. Proposed pipeline](assets/figures/figure_01.png)" in markdown
     assert (folder / "assets" / "figures" / "figure_01.png").read_bytes().startswith(b"\x89PNG")
     assert markdown.count("Bi-GRU") == 1  # tablo hücreleri paragraf olarak tekrar yazılmaz
@@ -183,3 +187,65 @@ def test_missing_tesseract_is_a_warning_not_an_error(tmp_input_copy, tmp_output,
     assert "Tesseract bulunamadı" in capsys.readouterr().err
     record = load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]
     assert record["status"] == "completed_with_warnings" and "ocr_unavailable: page 1" in record["warnings"]
+
+
+# --- Faz 07: görsel model ve Ollama ---
+
+def test_ollama_unreachable_exits_with_code_2(tmp_input_copy, tmp_output, capsys, fake_model_backend):
+    fake_model_backend.unavailable = True
+    assert run(tmp_input_copy, tmp_output) == EXIT_PREFLIGHT
+    assert "Ollama'ya erişilemiyor" in capsys.readouterr().err and not tmp_output.exists()
+
+
+def test_missing_text_model_shows_pull_command(tmp_input_copy, tmp_output, capsys, fake_model_backend):
+    # §38 kriter 18
+    fake_model_backend.models = ["minicpm-v4.5:8b"]
+    assert run(tmp_input_copy, tmp_output) == EXIT_PREFLIGHT
+    assert "Required model not found: gemma4:latest" in capsys.readouterr().err
+    fake_model_backend.models = ["gemma4:latest"]
+    assert run(tmp_input_copy, tmp_output, "--mode", "fast", "--include", "synthetic_single_column.pdf") == EXIT_OK
+
+
+def test_mode_controls_vision_calls_and_log_records_triggers(tmp_input_copy, tmp_output, fake_model_backend):
+    args = ("--include", "synthetic_table_equation.pdf")
+    assert run(tmp_input_copy, tmp_output, *args, "--mode", "fast") == EXIT_OK
+    assert fake_model_backend.calls == []  # FAST: formül/şekil için görsel model yok
+    markdown = (tmp_output / "synthetic_table_equation" / "synthetic_table_equation.md").read_text(encoding="utf-8")
+    assert "[latex_unavailable]" in markdown
+    assert run(tmp_input_copy, tmp_output, *args, "--mode", "full", "--force") == EXIT_OK
+    assert {call["task"] for call in fake_model_backend.calls} == {"EquationResult", "FigureResult"}
+    # §38 kriter 24: log dosyasında her görsel çağrı tetikleyicisiyle
+    log = "\n".join(p.read_text(encoding="utf-8") for p in (tmp_output / "logs").glob("*.log"))
+    assert "tetikleyici=candidate_full" in log and "tetikleyici=equation_requested" in log
+
+
+def test_vision_results_are_cached(tmp_input_copy, tmp_output, fake_model_backend):
+    args = ("--include", "synthetic_table_equation.pdf")
+    run(tmp_input_copy, tmp_output, *args)
+    first = len(fake_model_backend.calls)
+    record = load_state(tmp_output)["documents"]["synthetic_table_equation.pdf"]
+    (tmp_output / record["output_path"]).unlink()
+    assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK
+    assert first == 2 and len(fake_model_backend.calls) == first  # formül sonuçları önbellekten
+
+
+def test_model_service_stopping_mid_run_stops_batch(tmp_input_copy, tmp_output, capsys, fake_model_backend):
+    # §28: Ollama çalışma sırasında kapanırsa belge failed olmaz, batch durur, durum kaydedilir
+    from src.model_clients import ModelUnavailable
+    fake_model_backend.responses["EquationResult"] = [ModelUnavailable("bağlantı koptu")]
+    args = ("--include", "synthetic_table_equation.pdf", "--include", "synthetic_two_column.pdf")
+    assert run(tmp_input_copy, tmp_output, *args) == EXIT_DOC_FAILED
+    assert "Batch durduruldu" in capsys.readouterr().err
+    documents = load_state(tmp_output)["documents"]
+    assert documents["synthetic_table_equation.pdf"]["status"] == "pending"
+    assert documents["synthetic_two_column.pdf"]["status"] == "pending"  # sonraki belgeye geçilmedi
+    assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK  # servis döndü: kaldığı yerden devam
+
+
+def test_vision_model_missing_with_vision_not_required(tmp_input_copy, tmp_output, fake_model_backend, tmp_path):
+    fake_model_backend.models = ["gemma4:latest"]
+    config = tmp_path / "no_vision.yaml"
+    config.write_text("models:\n  vision_required: false\n", encoding="utf-8")
+    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_table_equation.pdf", "--config", str(config)) == EXIT_OK
+    record = load_state(tmp_output)["documents"]["synthetic_table_equation.pdf"]
+    assert record["status"] == "completed_with_warnings" and record["warnings"][0].startswith("vision_unavailable")

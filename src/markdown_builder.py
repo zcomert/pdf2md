@@ -85,7 +85,8 @@ def render_full_conversion(document, ctx):
 
 def unreadable_pages(document):
     """OCR veya görsel model ile metni çıkarılmamış taranmış sayfalar (§11.4)."""
-    return [page.number for page in document.pages if page.page_class == PageClass.scanned and not page.ocr_applied]
+    return [page.number for page in document.pages
+            if page.page_class == PageClass.scanned and not page.ocr_applied and not page.vision_applied]
 
 
 def _front_matter(ctx):
@@ -100,7 +101,7 @@ def _page_opening(page, ctx):
     if ctx.page_markers:
         suffix = " [parse_error]" if page.parse_error else ""
         lines.append(f"<!-- page: {page.number}{suffix} -->")
-    if page.page_class == PageClass.scanned and not page.ocr_applied:
+    if page.page_class == PageClass.scanned and not page.ocr_applied and not page.vision_applied:
         lines.append(UNREADABLE_PAGE)
     return lines
 

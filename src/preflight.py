@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Literal
 
 from . import dependencies
 from .errors import PreflightError
+from .model_clients import ModelUnavailable
 from .ocr import find_tesseract, resolve_ocr_settings
 from .paths import input_root, is_pdf_path, is_within
 
@@ -113,6 +115,63 @@ def check_ocr(config, info=None):
     if messages:
         return CheckResult("ocr", False, "warning", f"{'; '.join(messages)}. {detail}", OCR_INSTALL_HINT), settings
     return _ok("ocr", detail), settings
+
+
+def normalize_model_name(name):
+    """Ollama etiketsiz adı `:latest` olarak saklar (`gemma4` → `gemma4:latest`)."""
+    return name if ":" in name else f"{name}:latest"
+
+
+def check_models(config, backend):
+    """§26: Ollama erişimi, metin ve görsel modeli. Döner: (CheckResult listesi, {"text": ModelInfo|None,
+    "vision": ModelInfo|None}). Görsel model eksikliği `fast` modunda veya `vision_required: false` ise uyarıdır."""
+    try:
+        installed = backend.list_models()
+    except ModelUnavailable:
+        return [CheckResult("ollama", False, "error", f"Ollama'ya erişilemiyor: {config.ollama.endpoint}",
+                            "Ollama'yı başlatın (Ollama uygulaması veya `ollama serve`)")], {}
+    results = [_ok("ollama", f"Ollama erişilebilir ({config.ollama.endpoint}), {len(installed)} model kurulu")]
+    models = {}
+    for role, name, required in (("text", config.models.text, True),
+                                 ("vision", config.models.vision,
+                                  config.models.vision_required and config.mode != "fast")):
+        info = installed.get(normalize_model_name(name))
+        models[role] = info
+        if info is not None:
+            results.append(_ok(f"model_{role}", f"{info.reference}"))
+            continue
+        message = f"Required model not found: {name}"
+        hint = f"Run:\n  ollama pull {name}"
+        if required:
+            results.append(CheckResult(f"model_{role}", False, "error", message, hint))
+        else:
+            results.append(CheckResult(f"model_{role}", False, "warning", message + " (görsel model olmadan devam "
+                                       "ediliyor; OCR'sız taranmış sayfalar okunamaz, tablo/formüller işaretli kalır)", hint))
+    return results, models
+
+
+def check_gpu():
+    """§26: GPU bilgisi (nvidia-smi). Bulunamazsa uyarı; model çağrıları CPU'da çok yavaş olabilir."""
+    try:
+        completed = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,memory.free",
+                                    "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        line = completed.stdout.strip().splitlines()[0]
+        name, total, free = (part.strip() for part in line.split(","))
+        return _ok("gpu", f"GPU: {name}, VRAM {int(total)} MiB ({int(free)} MiB boş)")
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        return CheckResult("gpu", False, "warning", "GPU bilgisi alınamadı (nvidia-smi yok veya çalışmadı)")
+
+
+def check_vram(workers, models, free_mib):
+    """§27: `llm_workers > 1` ve iki modelin toplam boyutu boş VRAM'i aşıyorsa 1'e düşürülür. Döner: (worker, uyarı)."""
+    if workers <= 1:
+        return workers, None
+    total_mib = sum(info.size_bytes for info in models.values() if info) / 2 ** 20
+    if free_mib is None or total_mib > free_mib:
+        return 1, CheckResult("vram", False, "warning", f"Modeller ({total_mib:.0f} MiB) boş VRAM'e sığmıyor; "
+                                                     "llm_workers 1'e düşürüldü")
+    return workers, None
 
 
 def run_preflight(config, input_path, output_dir):

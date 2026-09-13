@@ -11,11 +11,13 @@ from .batch_processor import BatchEvents, BatchProcessor, Cancelled, CancelToken
 from .cache_manager import CacheManager
 from .config import load_config, merge_cli
 from .default_prompt import resolve_prompt
-from .errors import PreflightError
+from .errors import FatalBatchError, PreflightError
 from .logger import add_file_handler, new_run_id, setup_logging, unique_run_id
 from .paths import default_output_dir, normalize
 from .pdf_discovery import discover, sync_with_state
-from .preflight import check_ocr, raise_on_errors, run_preflight
+from .ollama_backend import OllamaBackend
+from .preflight import check_gpu, check_models, check_ocr, raise_on_errors, run_preflight
+from .vision_client import VisionClient
 from .schemas import RunSummary
 from .state_manager import OutputLock, StateManager
 
@@ -92,6 +94,17 @@ class ConsoleEvents(BatchEvents):
             self.bar.close()
 
 
+class VisionSetup:
+    def __init__(self, client, info):
+        self.client = client
+        self.info = info
+
+
+def create_model_backend(config, logger):
+    """Model arka ucu; testler bu fonksiyonu sahte arka uçla değiştirir."""
+    return OllamaBackend(config.ollama, logger, workers=config.processing.llm_workers)
+
+
 def _install_interrupt_handler(token, logger):
     """İlk Ctrl+C güvenli iptal ister (belge yarım bırakılmaz), ikincisi hemen keser."""
     if threading.current_thread() is not threading.main_thread():
@@ -137,6 +150,10 @@ def main(argv=None, events=None, cancel_token=None):
         checks = run_preflight(config, input_path, output_dir)
         ocr_check, ocr_settings = check_ocr(config)
         checks.append(ocr_check)
+        backend = create_model_backend(config, logger)
+        model_checks, models = check_models(config, backend)
+        checks.extend(model_checks)
+        checks.append(check_gpu())
         _log_checks(logger, checks)
         raise_on_errors(checks)
     except PreflightError as exc:
@@ -190,24 +207,41 @@ def main(argv=None, events=None, cancel_token=None):
         logger.info(discovery_message)
         print(discovery_message)
 
+        for role, info in models.items():
+            if info is not None:
+                logger.info("Model (%s): %s", role, info.reference)
+        vision = None
+        if models.get("vision") is not None:
+            vision = VisionSetup(VisionClient(backend, models["vision"].name, config.models.max_output_tokens, logger,
+                                              log_content=config.logging.log_model_content), models["vision"])
         processor = BatchProcessor(config, state, CacheManager(output_dir), output_dir, run_id, logger, prompt,
                                    force=args.force, events=events or ConsoleEvents(), cancel_token=token,
-                                   ocr_settings=ocr_settings)
+                                   ocr_settings=ocr_settings, vision=vision)
         cancelled = False
+        stopped = None
         try:
             processor.run(result, summary)
         except Cancelled:
             cancelled = True
+        except FatalBatchError as exc:
+            # §28: sistem geneli hata (model servisi kapandı); durum kaydedildi, yeniden çalıştırınca devam edilir.
+            stopped = exc
+            logger.error("Batch durduruldu [%s]: %s", exc.stage.value, exc.message)
         summary.failed += summary.discovery_failed
         summary.finished_at = datetime.now().isoformat(timespec="seconds")
         state.record_run(summary)
         for line in summary_lines(summary, cancelled):
             logger.info(line)
             print(line)
+        if stopped is not None:
+            print(f"Batch durduruldu: {stopped.message}. Sorunu giderip yeniden çalıştırınca kaldığı yerden devam edilir.",
+                  file=sys.stderr)
         print(f"Çıktı: {output_dir}")
         print(f"Log: {log_path}")
         if cancelled:
             return EXIT_CANCELLED
+        if stopped is not None:
+            return EXIT_DOC_FAILED
         return EXIT_DOC_FAILED if summary.failed else EXIT_OK
     except PreflightError as exc:
         logger.error(str(exc))

@@ -79,6 +79,7 @@ class RunSummary(StrictModel):
     recovered_interrupted: int = 0
     parsed: int = 0
     parsed_from_cache: int = 0
+    vision_calls: int = 0
     completed: int = 0
     completed_with_warnings: int = 0
     failed: int = 0

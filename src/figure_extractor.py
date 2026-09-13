@@ -22,7 +22,7 @@ def materialize_assets(pdf_path, document, doc_cache_dir, dpi, padding_pt, overw
     items = [(f.id, f.page, f.bbox, f.cache_path, f.image_xref, padding_pt) for f in document.figures if f.cache_path]
     # Tablo bölgeleri başlığın hemen altından/çizgilerden sıkı belirlenir; geniş pay başlık satırını görüntüye katar.
     items += [(t.id, t.page, t.bbox, t.cache_path, None, min(padding_pt, TABLE_PADDING_PT))
-              for t in document.tables if t.cache_path]
+              for t in document.tables if t.cache_path and not t.consistent]  # görselden yapılandırılan tablo görsel istemez
     missing = [item for item in items if overwrite or not (doc_cache_dir / item[3]).is_file()]
     result.available.update(item[0] for item in items if item not in missing)
     if not missing:
