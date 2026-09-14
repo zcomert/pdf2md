@@ -6,7 +6,7 @@
 
 ## Amaç
 
-Plana göre `document.json`'dan bilgi çıkarmak, her değeri kanıtıyla ve kural tabanlı güven seviyesiyle doğrulamak, sonucu önbelleğe yazmak ve `A.md`'yi promptun cevabı olarak üretmek. Bu faz §37 **Aşama 3**'ü belge kapsamı için tamamlar (koleksiyon kapsamı Faz 10).
+Plana göre `document.json`'dan bilgi çıkarmak, her değeri kanıtıyla ve kural tabanlı güven seviyesiyle doğrulamak, sonucu önbelleğe yazmak ve `A.md`'yi promptun cevabı olarak üretmek. Bu faz §37 **Aşama 3**'ü belge kapsamı için tamamlar (koleksiyon kapsamı Faz 12).
 
 ## Modüller
 
@@ -102,7 +102,7 @@ Plana göre `document.json`'dan bilgi çıkarmak, her değeri kanıtıyla ve kur
 - [x] Olaylar: `parse`, `vision`, `llm`, `validation`, `write` (varsayılan plan: `assets`)
 - [x] Durum: belge, görsel, çıkarım ve güvenlik ağı uyarıları → `completed_with_warnings`; front matter durumu ile tutarlı olsun diye gerekirse ikinci kez render
 - [x] State `models`: `text` ve varsa `vision`; `RunSummary.text_llm_calls` plan + çıkarım çağrıları
-- [x] CLI: özel prompt reddi kaldırıldı; plan kapsamı `collection` ise Faz 10'a kadar çıkış 2 ve `--scope document` önerisi; plan hedef filtresi (`targets.include`) uygulanır
+- [x] CLI: özel prompt reddi kaldırıldı; plan kapsamı `collection` ise Faz 12'ye kadar çıkış 2 ve `--scope document` önerisi; plan hedef filtresi (`targets.include`) uygulanır
 
 ### 8. Son kontrol (güvenlik ağı)
 
@@ -138,13 +138,13 @@ Kaynakta olmayan hiçbir sayı `verified` olmadı. Ancak Vekkot örneği, sayın
 
 ## Bilinen Sınırlamalar
 
-- **Model kararlılığı:** `temperature: 0` olsa da gerçek Gemma duman testi ~5 tam paket çalıştırmasında bir kez beklenen sonucu vermedi (tek başına 3/3 aynı sonuç). Diğer model testleri ile ardışık çalışırken VRAM paylaşımı olası neden
+- **Model kararlılığı:** `temperature: 0` olsa da gerçek Gemma çıktısı çalıştırmalar arasında değişebiliyor. Duman testinin ara sıra başarısız olmasının nedeni Faz 10'da görüldü: model en iyi değeri (0.99) bazen `results` listesine, bazen alanın `value_text`'ine yazıyor; iki durumda da değer doğru ve `verified`. Test her iki yerleşimi kabul edecek şekilde düzeltildi
 - **`verified` hücre düzeyinde değildir:** sayının kanıt bloğunda (tabloda modelin satırında) geçtiğini garanti eder, doğru sütunda/metrikte olduğunu garanti etmez. Gerçek sette 7 doğrulanmış sonuçtan 1'i yanlış sütundandı (Vekkot Table 9, F yerine Recall)
 - **Sayısal olmayan değerler** yalnızca metin örtüşmesiyle kontrol edilir; model makalede geçen ama yanlış bağlamdaki bir adı (ör. veri seti yerine "Interspeech 2011") seçebilir
 - **Liste alanlarında** kaynak etiketleri tüm kanıtları gösterir; madde bazında kaynak yok
 - **Başlık–alan eşleme** kelime benzerliğine dayanır; eşleşmeyen alanlar kendi etiketiyle sona eklenir
 - Yazım çağrısı ve şekil içeren prompt cevapları yok (yukarıdaki kararlar)
-- Koleksiyon kapsamı Faz 10'da
+- Koleksiyon kapsamı Faz 12'de
 
 ## Testler
 

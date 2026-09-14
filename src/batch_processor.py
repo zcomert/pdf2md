@@ -3,28 +3,33 @@
 GUI (Faz 13) aynı çekirdeği kullanabilsin diye ilerleme `BatchEvents` ile bildirilir, iptal ve duraklatma
 `CancelToken` ile işbirlikçi olarak yapılır: belge ve aşama sınırlarında kontrol edilir.
 """
+import shutil
 import threading
 import time
 from datetime import datetime
 
-from .atomic_io import atomic_write_text
-from .document_model import DocumentWarning
-from .errors import DocumentError, ErrorStage, FatalBatchError
+from . import PARSER_VERSION
 from .answer_builder import render_prompt_answer
-from .field_catalog import FULL_CONVERSION
-from .llm_extractor import extract, load_extraction, save_extraction, verify_extraction
-from .model_clients import ModelUnavailable
-from .vision_enrichment import apply_vision_results, run_vision_jobs
-from .vision_triggers import select_vision_jobs
 from .assets import sync_assets
+from .atomic_io import atomic_write_text
+from .document_model import DOCUMENT_SCHEMA_VERSION, DocumentWarning
+from .error_policy import CANCEL, STOP, WriteErrorTracker, classify
+from .errors import DocumentError, ErrorStage, FatalBatchError
+from .field_catalog import FULL_CONVERSION
 from .figure_extractor import materialize_assets
+from .llm_extractor import extract, load_extraction, save_extraction, verify_extraction
 from .markdown_builder import RenderContext, render_full_conversion, unreadable_pages
+from .model_clients import ModelUnavailable
+from .parse_pool import ParsePool, cache_header_matches
 from .paths import ensure_under_output, resolve_output_paths
 from .pdf_parser import parse_config_hash, parse_pdf
 from .prompt_planner import compute_plan_hash, default_plan
 from .schemas import DocumentStatus, HistoryEntry, ModelRef
+from .vision_enrichment import apply_vision_results, run_vision_jobs
+from .vision_triggers import select_vision_jobs
 
 COMPLETED_STATUSES = {DocumentStatus.completed, DocumentStatus.completed_with_warnings}
+PREFETCH_PER_WORKER = 2  # CPU havuzu önündeki belge tamponu: cpu_workers × 2 (§27)
 
 
 class Cancelled(Exception):
@@ -121,6 +126,9 @@ class BatchProcessor:
         self.events = events or BatchEvents()
         self.cancel_token = cancel_token or CancelToken()
         self._now = now or (lambda: datetime.now().isoformat(timespec="seconds"))
+        self._disk_usage = shutil.disk_usage
+        self._pool = None
+        self._write_errors = WriteErrorTracker()
         self._config_hash = parse_config_hash(config.pdf)
         self.ocr_settings = ocr_settings
         self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
@@ -130,20 +138,29 @@ class BatchProcessor:
                                                         vision_model=vision.info if vision else None)
 
     def run(self, discovery, summary):
-        """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled` yayılır;
-        o ana kadarki durum state'e yazılmış olur."""
+        """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled`, sistem geneli hatada
+        `FatalBatchError` yayılır; o ana kadarki durum state'e yazılmış olur."""
         started = time.monotonic()
         documents = [(pdf, self.state.get(pdf.relative_path)) for pdf in discovery.documents]
         documents = [(pdf, record) for pdf, record in documents if record is not None and record.sha256]
         existing = {rel: record.output_path for rel, record in self.state.state.documents.items() if record.output_path}
         planned = resolve_output_paths([(pdf.relative_path, record.sha256) for pdf, record in documents], existing)
+        decisions = []
+        for pdf, record in documents:
+            output_file = self.output_dir / record.output_path if record.output_path else None
+            decisions.append((pdf, record, decide(record, self.plan_hash, output_file,
+                                                  self.config.processing.retry_failed, self.force)))
+        to_process = [(pdf, record) for pdf, record, decision in decisions if decision == "process"]
+        workers = self.config.processing.cpu_workers
+        self._pool = ParsePool(workers, self.output_dir) if workers > 1 and len(to_process) > 1 else None
+        self._write_errors = WriteErrorTracker()
+        position = 0
 
         self.events.on_run_start(len(documents))
+        cancelled = False
         try:
-            for index, (pdf, record) in enumerate(documents, start=1):
+            for index, (pdf, record, decision) in enumerate(decisions, start=1):
                 self.cancel_token.checkpoint()
-                output_file = self.output_dir / record.output_path if record.output_path else None
-                decision = decide(record, self.plan_hash, output_file, self.config.processing.retry_failed, self.force)
                 if decision == "skip":
                     summary.skipped += 1
                     self.logger.info("Atlandı (değişmedi): %s", pdf.relative_path)
@@ -153,17 +170,49 @@ class BatchProcessor:
                     summary.not_retried += 1
                     self.logger.info("Denenmedi (önceki çalıştırmada başarısız; --retry-failed): %s", pdf.relative_path)
                     continue
+                self._check_disk()
+                if self._pool is not None:
+                    self._prefetch(to_process[position:position + workers * PREFETCH_PER_WORKER])
+                position += 1
                 self.events.on_document_start(pdf.relative_path, index, len(documents))
+                self.logger.info("Başladı: %s (%d/%d)", pdf.relative_path, index, len(documents))
                 self._process(pdf, record, planned[pdf.relative_path], summary)
+        except (Cancelled, FatalBatchError):
+            cancelled = True
+            raise
         finally:
+            if self._pool is not None:
+                self._pool.shutdown(cancel=cancelled)
             summary.total_time_sec = round(time.monotonic() - started, 2)
             self.events.on_run_end(summary)
         return summary
 
+    def _check_disk(self):
+        """§28: her belgeden önce boş disk alanı; yetersizse batch durur (belgeye dokunulmadan)."""
+        minimum = self.config.processing.min_free_disk_mb
+        try:
+            free_mb = self._disk_usage(self.output_dir).free // (1024 * 1024)
+        except OSError:
+            return
+        if free_mb < minimum:
+            raise FatalBatchError(ErrorStage.write, f"Yetersiz disk alanı: {free_mb} MB boş, en az {minimum} MB gerekli",
+                                  error_type="insufficient_disk")
+
+    def _prefetch(self, items):
+        for pdf, record in items:
+            if self._pool.pending(record.sha256) is not None:
+                continue
+            if not self.force and cache_header_matches(self.cache, record.sha256, DOCUMENT_SCHEMA_VERSION,
+                                                       PARSER_VERSION, self._config_hash):
+                continue
+            self._pool.submit(pdf, record.sha256, self.config.pdf, self.ocr_settings)
+
     def _process(self, pdf, record, output_rel, summary):
         rel = pdf.relative_path
-        self.state.update(rel, status=DocumentStatus.processing, attempts=record.attempts + 1, last_run_id=self.run_id)
+        attempt = record.attempts + 1
+        self.state.update(rel, status=DocumentStatus.processing, attempts=attempt, last_run_id=self.run_id)
         started = time.monotonic()
+        calls_before = (summary.vision_calls, summary.text_llm_calls)
         stage = ErrorStage.parse
         try:
             self.events.on_stage(rel, "parse")
@@ -184,21 +233,22 @@ class BatchProcessor:
                 stage = ErrorStage.llm
                 status, warnings = self._write_prompt_answer(pdf, record, document, base_warnings, models, output_rel,
                                                              summary)
-        except ModelUnavailable as exc:
-            # §28: metin modeli servisi kapandı; belge sonraki çalıştırmada işlenir, batch durur.
-            self.state.update(rel, status=DocumentStatus.pending)
-            raise FatalBatchError(ErrorStage.llm, str(exc)) from exc
-        except (Cancelled, FatalBatchError):
-            # Belgenin kendisinde sorun yok (iptal veya model servisi kapandı): sonraki çalıştırmada işlenir.
-            self.state.update(rel, status=DocumentStatus.pending)
-            raise
-        except DocumentError as exc:
-            return self._fail(rel, exc.stage, exc.message, summary)
-        except OSError as exc:
-            return self._fail(rel, ErrorStage.write, f"Yazılamadı: {exc}", summary)
-        except Exception as exc:  # beklenmeyen hata tek bir PDF yüzünden batch'i durdurmamalı
-            self.logger.exception("Beklenmeyen hata [%s]: %s", stage.value, rel)
-            return self._fail(rel, stage, f"{type(exc).__name__}: {exc}", summary)
+        except Exception as exc:  # davranış §28 tablosundan (error_policy); tek PDF hatası batch'i durdurmaz
+            outcome = classify(exc, stage, Cancelled)
+            if outcome.action in (CANCEL, STOP):
+                # Belgenin kendisinde sorun yok (iptal, model servisi kapandı, disk dolu): sonraki çalıştırmada işlenir.
+                self.state.update(rel, status=DocumentStatus.pending)
+                if outcome.action == CANCEL or isinstance(exc, FatalBatchError):
+                    raise
+                raise FatalBatchError(outcome.stage, outcome.message, outcome.error_type) from exc
+            if outcome.error_type == "unexpected_error":
+                self.logger.exception("Beklenmeyen hata [%s]: %s", stage.value, rel)
+            self._fail(rel, outcome, attempt, summary)
+            if self._write_errors.record(outcome):
+                raise FatalBatchError(ErrorStage.write, f"Yazma hatası art arda tekrarlandı: {outcome.message}",
+                                      error_type="repeated_write_error") from exc
+            return
+        self._write_errors.success()
 
         history = list(record.history)
         if record.status in COMPLETED_STATUSES and record.plan_hash != self.plan_hash and (record.plan_hash or record.prompt_sha256):
@@ -208,14 +258,30 @@ class BatchProcessor:
         elapsed = round(time.monotonic() - started, 2)
         self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
                           prompt_sha256=self.prompt.sha256, plan_hash=self.plan_hash, processed_at=self._now(), processing_time_sec=elapsed,
-                          error_stage=None, error=None, history=history,
+                          error_stage=None, error_type=None, error=None, history=history,
                           models={role: ModelRef(name=info.name, digest=info.digest) for role, info in models.items()})
         if status == DocumentStatus.completed:
             summary.completed += 1
         else:
             summary.completed_with_warnings += 1
         self.logger.info("Tamamlandı [%s]: %s → %s (%.1f sn, %d uyarı)", status.value, rel, output_rel, elapsed, len(warnings))
+        self._log_document_summary(rel, document, elapsed, summary, calls_before, warnings, status)
         self.events.on_document_end(rel, status, warnings, output_rel)
+
+    def _log_document_summary(self, rel, document, elapsed, summary, calls_before, warnings, status):
+        """§29 belge başına kayıt: süre, sayfa ve sınıfları, OCR/görsel/metin çağrıları, uyarı türleri, durum."""
+        stats = document.stats
+        classes = " ".join(f"{name}={count}" for name, count in (("text", stats.text_pages), ("mixed", stats.mixed_pages),
+                                                                   ("scanned", stats.scanned_pages)) if count)
+        codes = {}
+        for warning in warnings:
+            code = warning.split(":", 1)[0]
+            codes[code] = codes.get(code, 0) + 1
+        warning_text = ", ".join(f"{code}×{count}" for code, count in codes.items()) or "-"
+        self.logger.info("Belge özeti: %s — %.1f sn, %d sayfa (%s), OCR %d sayfa, görsel çağrı %d, metin çağrı %d, "
+                         "uyarılar: %s, durum: %s", rel, elapsed, stats.pages, classes or "-", stats.ocr_pages,
+                         summary.vision_calls - calls_before[0], summary.text_llm_calls - calls_before[1],
+                         warning_text, status.value)
 
     def _write_full_conversion(self, pdf, record, document, warnings, models, output_rel):
         """Varsayılan plan: deterministik tam dönüşüm (§16.3), metin LLM'i çağrılmaz. Döner: (durum, uyarılar)."""
@@ -294,13 +360,27 @@ class BatchProcessor:
 
     def _load_or_parse(self, pdf, record, summary):
         signature = self.ocr_settings.signature if self.ocr_settings else None
-        document = self.cache.load_document(record.sha256, self._config_hash, force=self.force, ocr_signature=signature)
+        future = self._pool.pending(record.sha256) if getattr(self, "_pool", None) is not None else None
+        if future is not None and not getattr(future, "counted", False):
+            future.result()  # worker hatası (DocumentError) burada yeniden fırlatılır
+            future.counted = True
+            document = self.cache.load_document(record.sha256, self._config_hash, ocr_signature=signature)
+            if document is not None:
+                summary.parsed += 1
+                self._log_parsed(pdf, document)
+                return document
+        document = self.cache.load_document(record.sha256, self._config_hash,
+                                            force=self.force and future is None, ocr_signature=signature)
         if document is not None:
             summary.parsed_from_cache += 1
             return document
         document = parse_pdf(pdf.absolute_path, pdf.relative_path, record.sha256, self.config.pdf, self.ocr_settings)
         self.cache.save_document(document)
         summary.parsed += 1
+        self._log_parsed(pdf, document)
+        return document
+
+    def _log_parsed(self, pdf, document):
         classes = ", ".join(f"{name}={count}" for name, count in (("text", document.stats.text_pages),
                             ("mixed", document.stats.mixed_pages), ("scanned", document.stats.scanned_pages)) if count)
         ocr = f", OCR {document.stats.ocr_pages} sayfa" if document.stats.ocr_pages else ""
@@ -340,8 +420,11 @@ class BatchProcessor:
                              front_matter=self.config.output.front_matter, page_markers=self.config.output.page_markers,
                              available_assets=available_assets)
 
-    def _fail(self, relative_path, stage, message, summary):
-        self.state.update(relative_path, status=DocumentStatus.failed, error_stage=stage, error=message)
+    def _fail(self, relative_path, outcome, attempt, summary):
+        """§28 hata kaydı: kaynak dosya, aşama, hata türü, mesaj, deneme numarası."""
+        self.state.update(relative_path, status=DocumentStatus.failed, error_stage=outcome.stage,
+                          error_type=outcome.error_type, error=outcome.message)
         summary.failed += 1
-        self.logger.error("Başarısız [%s]: %s — %s", stage.value, relative_path, message)
-        self.events.on_document_end(relative_path, DocumentStatus.failed, [], None, error=message)
+        self.logger.error("Başarısız [%s/%s]: %s (deneme %d) — %s", outcome.stage.value, outcome.error_type,
+                          relative_path, attempt, outcome.message)
+        self.events.on_document_end(relative_path, DocumentStatus.failed, [], None, error=outcome.message)

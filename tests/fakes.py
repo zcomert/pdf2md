@@ -1,4 +1,5 @@
 """Testlerde gerçek Ollama yerine kullanılan sahte model arka ucu."""
+import hashlib
 import json
 
 from src.model_clients import ModelInfo, ModelResponse, ModelTimeout, ModelUnavailable
@@ -46,7 +47,8 @@ class FakeBackend:
     def list_models(self):
         if self.unavailable:
             raise ModelUnavailable("sahte: Ollama kapalı")
-        return {name: ModelInfo(name, f"{abs(hash(name)):064d}"[-64:], 5 * 2 ** 30) for name in self.models}
+        # Digest süreçten bağımsız olmalı (alt süreç testleri); `hash()` süreç başına rastgeledir.
+        return {name: ModelInfo(name, hashlib.sha256(name.encode()).hexdigest(), 5 * 2 ** 30) for name in self.models}
 
     def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
         title = (schema or {}).get("title", "")

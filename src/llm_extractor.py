@@ -243,7 +243,9 @@ def extract(document, plan, plan_hash, text_client, max_retries, num_ctx, max_ou
         calls += outcome.calls
         if outcome.result is None:
             stage = ErrorStage.validation if outcome.error_kind == "invalid" else ErrorStage.llm
-            raise DocumentError(stage, f"Çıkarım başarısız (parça {index}/{len(chunks)}): {outcome.error}")
+            error_type = {"invalid": "invalid_model_response", "timeout": "model_timeout"}.get(outcome.error_kind,
+                                                                                                "model_not_found")
+            raise DocumentError(stage, f"Çıkarım başarısız (parça {index}/{len(chunks)}): {outcome.error}", error_type)
         partials.append(outcome.result)
     extraction = merge_partials(partials, plan, document, plan_hash)
     extraction.chunks, extraction.llm_calls = len(chunks), calls

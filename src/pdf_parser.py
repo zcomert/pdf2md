@@ -47,13 +47,14 @@ def open_pdf(path):
     except Exception as exc:
         # MuPDF mesajı dosyanın mutlak yolunu içerir; kayıtta dosya zaten belli olduğundan çıkarılır.
         detail = str(exc).replace(f"'{path}'", "").replace(str(path), "").strip()
-        raise DocumentError(ErrorStage.parse, f"PDF açılamadı ({type(exc).__name__}): {detail}") from exc
+        raise DocumentError(ErrorStage.parse, f"PDF açılamadı ({type(exc).__name__}): {detail}",
+                            error_type="corrupt_pdf") from exc
     if doc.needs_pass and not doc.authenticate(""):
         doc.close()
-        raise DocumentError(ErrorStage.parse, "PDF şifreli ve boş parola ile açılamıyor")
+        raise DocumentError(ErrorStage.parse, "PDF şifreli ve boş parola ile açılamıyor", error_type="encrypted_pdf")
     if doc.page_count == 0:
         doc.close()
-        raise DocumentError(ErrorStage.parse, "PDF'te okunabilir sayfa yok (bozuk olabilir)")
+        raise DocumentError(ErrorStage.parse, "PDF'te okunabilir sayfa yok (bozuk olabilir)", error_type="corrupt_pdf")
     return doc
 
 

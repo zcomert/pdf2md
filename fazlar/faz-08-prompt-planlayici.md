@@ -103,7 +103,7 @@ Tamamlanma kriteri komutu (gerçek set, 9 PDF): `collection`, alanlar `dataset.n
 
 - `scope_reason` ve kapsam kararı modele bağlıdır; `--scope` her zaman kesin sonuç verir. İlk denemede (örneksiz, sayı bilgili istem) 6 örnekten 1'i yanlıştı; istem düzeltmesinden sonra 8/8 doğru
 - Gerekçe metni İngilizce gelebilir (çıktı dili yalnızca başlıklar için uygulanır)
-- `collection_name_suggestion` bazen uzun; koleksiyon adı Faz 10'da güvenli ada dönüştürülecek
+- `collection_name_suggestion` bazen uzun; koleksiyon adı Faz 12'de güvenli ada dönüştürülecek
 - Plan önbelleği ham planı tuttuğundan, aynı prompt farklı giriş türüyle (klasör / tek PDF) ilk planın alanlarını kullanır; kapsam kuralı yine uygulanır
 
 ## Testler

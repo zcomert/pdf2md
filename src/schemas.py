@@ -51,6 +51,7 @@ class DocumentState(StrictModel):
     attempts: int = Field(0, ge=0)
     last_run_id: str | None = None
     error_stage: ErrorStage | None = None
+    error_type: str | None = None
     error: str | None = None
     history: list[HistoryEntry] = []
 

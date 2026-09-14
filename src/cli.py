@@ -166,10 +166,12 @@ def run_plan_only(prompt, config, input_path, output_dir, backend, models, logge
 
 
 def _install_interrupt_handler(token, logger):
-    """İlk Ctrl+C güvenli iptal ister (belge yarım bırakılmaz), ikincisi hemen keser."""
+    """İlk Ctrl+C (veya Windows Ctrl+Break) güvenli iptal ister (belge yarım bırakılmaz), ikincisi hemen keser.
+    Kilit `atexit` ve `finally` ile bırakılır."""
     if threading.current_thread() is not threading.main_thread():
         return None
-    previous = signal.getsignal(signal.SIGINT)
+    signals = [signal.SIGINT] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
+    previous = {signum: signal.getsignal(signum) for signum in signals}
 
     def handler(signum, frame):
         if token.cancelled:
@@ -177,7 +179,8 @@ def _install_interrupt_handler(token, logger):
         token.cancel()
         logger.warning("İptal istendi; güvenli bir noktada durulacak. Hemen çıkmak için tekrar Ctrl+C.")
 
-    signal.signal(signal.SIGINT, handler)
+    for signum in signals:
+        signal.signal(signum, handler)
     return previous
 
 
@@ -275,7 +278,7 @@ def main(argv=None, events=None, cancel_token=None):
             raise PreflightError(f"Plan oluşturulamadı: {exc}") from exc
         _log_plan(logger, plan_result, plan_hash)
         if plan_result.plan.scope == "collection":
-            raise PreflightError("Koleksiyon kapsamı henüz desteklenmiyor (Faz 10).",
+            raise PreflightError("Koleksiyon kapsamı henüz desteklenmiyor (Faz 12).",
                                  "Her PDF için ayrı cevap üretmek üzere --scope document ile çalıştırın")
         summary.plan_hash = plan_hash
         targeted = filter_targets(result.documents, plan_result.plan, context)
@@ -324,8 +327,8 @@ def main(argv=None, events=None, cancel_token=None):
         _print_error(exc)
         return EXIT_PREFLIGHT
     finally:
-        if previous_handler is not None:
-            signal.signal(signal.SIGINT, previous_handler)
+        for signum, handler in (previous_handler or {}).items():
+            signal.signal(signum, handler)
         lock.release()
 
 
