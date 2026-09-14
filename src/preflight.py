@@ -49,6 +49,18 @@ def check_dependencies(find_spec=None):
                        dependencies.install_command())
 
 
+def check_xlsx(config, find_spec=None):
+    """§22.1: `output.save_xlsx` için `openpyxl` gerekir; yoksa uyarı, yalnızca CSV yazılır."""
+    if not config.output.save_xlsx:
+        return None
+    import importlib.util
+    find_spec = find_spec or importlib.util.find_spec
+    if find_spec("openpyxl") is None:
+        return CheckResult("xlsx", False, "warning", "output.save_xlsx açık ama openpyxl kurulu değil; yalnızca CSV yazılacak",
+                           "pip install -r requirements-optional.txt")
+    return _ok("xlsx", "papers_summary.xlsx yazılacak (openpyxl kurulu)")
+
+
 def check_input(input_path):
     path = Path(input_path)
     if not path.exists():

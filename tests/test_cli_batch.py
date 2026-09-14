@@ -71,7 +71,8 @@ def test_tables_equations_and_figures_in_markdown(tmp_input_copy, tmp_output):
 
 
 def test_no_text_llm_in_full_conversion(tmp_input_copy, tmp_output):
-    # §38 kriter 4: varsayılan prompt metin LLM'i çağırmaz; kullanılan model kaydı boştur
+    # §38 kriter 4 (Faz 11 yorumu): A.md üretilirken metin LLM'i çağrılmaz; içerik model kaydı boştur. Künye adımı
+    # envanterin parçasıdır (çağrı sayısı `text_llm_calls` sütununda).
     run(tmp_input_copy, tmp_output, "--include", "synthetic_single_column.pdf")
     record = load_state(tmp_output)["documents"]["synthetic_single_column.pdf"]
     assert record["models"] == {}
@@ -203,11 +204,11 @@ def test_missing_text_model_shows_pull_command(tmp_input_copy, tmp_output, capsy
 def test_mode_controls_vision_calls_and_log_records_triggers(tmp_input_copy, tmp_output, fake_model_backend):
     args = ("--include", "synthetic_table_equation.pdf")
     assert run(tmp_input_copy, tmp_output, *args, "--mode", "fast") == EXIT_OK
-    assert fake_model_backend.calls == []  # FAST: formül/şekil için görsel model yok
+    assert fake_model_backend.vision_calls() == []  # FAST: formül/şekil için görsel model yok
     markdown = (tmp_output / "synthetic_table_equation" / "synthetic_table_equation.md").read_text(encoding="utf-8")
     assert "[latex_unavailable]" in markdown
     assert run(tmp_input_copy, tmp_output, *args, "--mode", "full", "--force") == EXIT_OK
-    assert {call["task"] for call in fake_model_backend.calls} == {"EquationResult", "FigureResult"}
+    assert {call["task"] for call in fake_model_backend.vision_calls()} == {"EquationResult", "FigureResult"}
     # §38 kriter 24: log dosyasında her görsel çağrı tetikleyicisiyle
     log = "\n".join(p.read_text(encoding="utf-8") for p in (tmp_output / "logs").glob("*.log"))
     assert "tetikleyici=candidate_full" in log and "tetikleyici=equation_requested" in log
@@ -216,11 +217,11 @@ def test_mode_controls_vision_calls_and_log_records_triggers(tmp_input_copy, tmp
 def test_vision_results_are_cached(tmp_input_copy, tmp_output, fake_model_backend):
     args = ("--include", "synthetic_table_equation.pdf")
     run(tmp_input_copy, tmp_output, *args)
-    first = len(fake_model_backend.calls)
+    first = len(fake_model_backend.vision_calls())
     record = load_state(tmp_output)["documents"]["synthetic_table_equation.pdf"]
     (tmp_output / record["output_path"]).unlink()
     assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK
-    assert first == 2 and len(fake_model_backend.calls) == first  # formül sonuçları önbellekten
+    assert first == 2 and len(fake_model_backend.vision_calls()) == first  # formül sonuçları önbellekten
 
 
 def test_model_service_stopping_mid_run_stops_batch(tmp_input_copy, tmp_output, capsys, fake_model_backend):

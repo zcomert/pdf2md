@@ -6,6 +6,7 @@ from src.model_clients import ModelInfo, ModelResponse, ModelTimeout, ModelUnava
 
 TEXT_MODEL = "gemma4:latest"
 VISION_MODEL = "minicpm-v4.5:8b"
+VISION_TASKS = {"TableResult", "EquationResult", "FigureResult", "PageTextResult", "PageLayoutResult"}
 FAKE_PAGE_TEXT = "Görsel modelden okunan sayfa metni."
 FAKE_LATEX = "z = \\frac{x - \\mu}{s}"
 FAKE_PLAN = {"scope": "collection", "scope_reason": "The request compares datasets across papers.",
@@ -65,6 +66,9 @@ class FakeBackend:
 
     def calls_for(self, title):
         return [call for call in self.calls if call["task"] == title]
+
+    def vision_calls(self):
+        return [call for call in self.calls if call["task"] in VISION_TASKS]
 
 
 __all__ = ["FakeBackend", "ModelTimeout", "ModelUnavailable", "FAKE_PAGE_TEXT", "FAKE_LATEX", "FAKE_PLAN"]

@@ -174,7 +174,7 @@ def test_document_summary_logged_without_pdf_content(tmp_input_copy, tmp_output,
                "--prompt", "Veri setini çıkar.") == EXIT_OK
     log = next((tmp_output / "logs").glob("*.log")).read_text(encoding="utf-8")
     assert "Başladı: synthetic_single_column.pdf (1/1)" in log
-    assert "Belge özeti: synthetic_single_column.pdf — " in log and "1 sayfa (text=1), OCR 0 sayfa, görsel çağrı 0, metin çağrı 1" in log
+    assert "Belge özeti: synthetic_single_column.pdf — " in log and "1 sayfa (text=1), OCR 0 sayfa, görsel çağrı 0, metin çağrı 2" in log
     # §29: PDF içeriği ve model yanıtı loglanmaz (log_model_content: false)
     assert "physiological signals" not in log and "GizliVeriSeti" not in log
 

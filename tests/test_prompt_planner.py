@@ -247,7 +247,8 @@ def test_run_records_plan_hash_in_state_and_summary(tmp_input_copy, tmp_output, 
     record = state["documents"]["synthetic_single_column.pdf"]
     run = next(iter(state["runs"].values()))
     assert len(record["plan_hash"]) == 64 and run["plan_hash"] == record["plan_hash"]
-    assert run["text_llm_calls"] == 0 and not fake_model_backend.calls_for("ProcessingPlan")
+    # Varsayılan promptta plan için çağrı yok; tek metin çağrısı künye adımı (Faz 11)
+    assert run["text_llm_calls"] == 1 and not fake_model_backend.calls_for("ProcessingPlan")
     log = next((tmp_output / "logs").glob("*.log")).read_text(encoding="utf-8")
     assert f"plan_hash={record['plan_hash']}" in log
 

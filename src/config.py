@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from .errors import PreflightError
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
@@ -49,6 +49,18 @@ class OutputConfig(StrictModel):
 
 class SummaryConfig(StrictModel):
     extra_fields: list[str] = []
+    # Faz 11 kararı (§22.3 ↔ §38 kriter 4): künyede eksik alanlar için kısa metin LLM çağrısı. A.md içeriğinin
+    # parçası değildir; kapatılırsa künye yalnızca metadata, DOI regex'i ve başlık tespitinden gelir. §25'e eklenmeli.
+    bibliographic_llm: bool = True
+
+    @field_validator("extra_fields")
+    @classmethod
+    def known_fields(cls, fields):
+        from .field_catalog import is_summary_field  # döngüsel içe aktarmayı önler
+        unknown = [key for key in fields if not is_summary_field(key)]
+        if unknown:
+            raise ValueError(f"alan kataloğunda olmayan alanlar: {unknown} (örn. dataset.name, results.best_accuracy)")
+        return list(dict.fromkeys(fields))
 
 class LoggingConfig(StrictModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

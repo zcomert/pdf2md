@@ -231,10 +231,21 @@ def _sha(value):
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def compute_plan_hash(plan, prompt_sha256, mode, text_model=None, vision_model=None, uses_text_model=False):
+def summary_signature(summary_config, text_model=None):
+    """Envanter ayarları (§22.3–22.4) plan hash'ine girer: künye LLM'i veya `extra_fields` değişince belgeler yeniden
+    işlenir (önbellekten). Bu ayarlar metin modelini kullanıyorsa model digest'i de girer."""
+    from .bibliographic import BIBLIOGRAPHIC_VERSION
+    uses_llm = summary_config.bibliographic_llm or bool(summary_config.extra_fields)
+    return {"bibliographic_version": BIBLIOGRAPHIC_VERSION, "bibliographic_llm": summary_config.bibliographic_llm,
+            "extra_fields": list(summary_config.extra_fields), "text_model": _model(text_model) if uses_llm else None}
+
+
+def compute_plan_hash(plan, prompt_sha256, mode, text_model=None, vision_model=None, uses_text_model=False,
+                      summary=None):
     """Plan hash'i tek yerde hesaplanır. Belge çıktısını etkileyen her şey girer: planın içerik alanları, prompt,
     mod, model adları ve digest'leri, ayrıştırıcı ve şema sürümleri. `targets` hangi belgelerin işleneceğini seçer,
-    tek belgenin çıktısını değiştirmez; hash'e girmez.
+    tek belgenin çıktısını değiştirmez; hash'e girmez. `summary`: envanter imzası (`summary_signature`); prompt
+    çıkarımının önbellek anahtarı imzasız hash'tir, böylece envanter ayarı değişince çıkarım tekrarlanmaz.
 
     Metin modeli yalnızca plan onu kullanıyorsa dahil edilir: varsayılan plan (tam dönüşüm) metin LLM'i çağırmaz,
     Gemma güncellenince bütün tam dönüşümlerin gereksiz yere yeniden yapılması önlenir."""
@@ -249,6 +260,8 @@ def compute_plan_hash(plan, prompt_sha256, mode, text_model=None, vision_model=N
         "parser_version": PARSER_VERSION,
         "schema_versions": {"document": DOCUMENT_SCHEMA_VERSION, "plan": PLAN_SCHEMA_VERSION},
     }
+    if summary is not None:
+        payload["summary"] = summary
     return _sha(payload)
 
 

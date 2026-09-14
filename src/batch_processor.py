@@ -10,6 +10,7 @@ from datetime import datetime
 
 from . import PARSER_VERSION
 from .answer_builder import render_prompt_answer
+from .bibliographic import extract_bibliographic
 from .assets import sync_assets
 from .atomic_io import atomic_write_text
 from .document_model import DOCUMENT_SCHEMA_VERSION, DocumentWarning
@@ -23,8 +24,9 @@ from .model_clients import ModelUnavailable
 from .parse_pool import ParsePool, cache_header_matches
 from .paths import ensure_under_output, resolve_output_paths
 from .pdf_parser import parse_config_hash, parse_pdf
-from .prompt_planner import compute_plan_hash, default_plan
+from .prompt_planner import compute_plan_hash, default_plan, summary_signature
 from .schemas import DocumentStatus, HistoryEntry, ModelRef
+from .summary_writer import analytic_values, summary_plan, write_summary
 from .vision_enrichment import apply_vision_results, run_vision_jobs
 from .vision_triggers import select_vision_jobs
 
@@ -114,7 +116,7 @@ def _non_empty(path):
 class BatchProcessor:
     def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
                  events=None, cancel_token=None, now=None, ocr_settings=None, vision=None, plan=None, plan_hash=None,
-                 text=None):
+                 text=None, content_hash=None):
         self.config = config
         self.state = state
         self.cache = cache
@@ -134,8 +136,13 @@ class BatchProcessor:
         self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
         self.plan = plan or default_plan()
         self.text = text  # TextSetup (istemci + model bilgisi); varsayılan plan metin modelini kullanmaz
-        self.plan_hash = plan_hash or compute_plan_hash(self.plan, prompt.sha256, config.mode,
-                                                        vision_model=vision.info if vision else None)
+        hash_args = dict(vision_model=vision.info if vision else None, text_model=text.info if text else None,
+                         uses_text_model=FULL_CONVERSION not in self.plan.requested_fields)
+        # `plan_hash`: atlama kuralı (envanter ayarları dahil); `content_hash`: prompt çıkarımı önbellek anahtarı.
+        self.content_hash = content_hash or compute_plan_hash(self.plan, prompt.sha256, config.mode, **hash_args)
+        self.plan_hash = plan_hash or compute_plan_hash(self.plan, prompt.sha256, config.mode, **hash_args,
+                                                        summary=summary_signature(config.summary,
+                                                                                  text.info if text else None))
 
     def run(self, discovery, summary):
         """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled`, sistem geneli hatada
@@ -226,13 +233,16 @@ class BatchProcessor:
 
             base_warnings = [str(w) for w in document.warnings] + vision_warnings + list(self.prompt.run_warnings)
             models = {"vision": vision_model} if vision_model else {}
+            extraction = None
             if FULL_CONVERSION in self.plan.requested_fields:
                 stage = ErrorStage.write
                 status, warnings = self._write_full_conversion(pdf, record, document, base_warnings, models, output_rel)
             else:
                 stage = ErrorStage.llm
-                status, warnings = self._write_prompt_answer(pdf, record, document, base_warnings, models, output_rel,
-                                                             summary)
+                status, warnings, extraction = self._write_prompt_answer(pdf, record, document, base_warnings, models,
+                                                                         output_rel, summary)
+            stage = ErrorStage.llm
+            bibliographic, summary_values = self._inventory(pdf, record, document, extraction, summary)
         except Exception as exc:  # davranış §28 tablosundan (error_policy); tek PDF hatası batch'i durdurmaz
             outcome = classify(exc, stage, Cancelled)
             if outcome.action in (CANCEL, STOP):
@@ -259,7 +269,12 @@ class BatchProcessor:
         self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
                           prompt_sha256=self.prompt.sha256, plan_hash=self.plan_hash, processed_at=self._now(), processing_time_sec=elapsed,
                           error_stage=None, error_type=None, error=None, history=history,
-                          models={role: ModelRef(name=info.name, digest=info.digest) for role, info in models.items()})
+                          models={role: ModelRef(name=info.name, digest=info.digest) for role, info in models.items()},
+                          pages=document.stats.pages, scanned_pages=document.stats.scanned_pages,
+                          ocr_pages=document.stats.ocr_pages, vision_calls=summary.vision_calls - calls_before[0],
+                          text_llm_calls=summary.text_llm_calls - calls_before[1], bibliographic=bibliographic,
+                          summary_values=summary_values)
+        self.write_summary()
         if status == DocumentStatus.completed:
             summary.completed += 1
         else:
@@ -315,12 +330,12 @@ class BatchProcessor:
         rel = pdf.relative_path
         if self.text is None:
             raise DocumentError(ErrorStage.llm, "Metin modeli kullanılamıyor")
-        path = self.cache.extraction_path(record.sha256, self.plan_hash)
-        extraction = None if self.force else load_extraction(path, record.sha256, self.plan_hash)
+        path = self.cache.extraction_path(record.sha256, self.content_hash)
+        extraction = None if self.force else load_extraction(path, record.sha256, self.content_hash)
         if extraction is None:
             self.events.on_stage(rel, "llm")
             config = self.config
-            extraction = extract(document, self.plan, self.plan_hash, self.text.client, config.ollama.max_retries,
+            extraction = extract(document, self.plan, self.content_hash, self.text.client, config.ollama.max_retries,
                                  config.models.text_num_ctx, config.models.max_output_tokens,
                                  errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger,
                                  checkpoint=self.cancel_token.checkpoint)
@@ -356,7 +371,62 @@ class BatchProcessor:
         self.cancel_token.checkpoint()
         sync_assets(target.parent, self.cache.doc_dir(record.sha256), [])  # önceki tam dönüşümün görselleri kaldırılır
         atomic_write_text(target, answer.markdown)
-        return status, warnings
+        return status, warnings, extraction
+
+    def _inventory(self, pdf, record, document, extraction, summary):
+        """Envanter (§22.3–22.4): künye ve analitik sütunlar. `A.md` içeriğinin parçası değildir; uyarıları belge
+        durumunu değiştirmez, loglanır. Model servisi kapanması dışındaki hatalar belgeyi başarısız yapmaz."""
+        rel = pdf.relative_path
+        self.events.on_stage(rel, "inventory")
+        config = self.config
+        text_client = self.text.client if self.text else None
+        text_model = self.text.info if self.text else None
+        result = extract_bibliographic(
+            document, text_client, text_model, extraction=extraction, cache_dir=self.cache.doc_dir(record.sha256),
+            force=self.force, use_llm=config.summary.bibliographic_llm, max_retries=config.ollama.max_retries,
+            num_ctx=config.models.text_num_ctx, max_output_tokens=config.models.max_output_tokens,
+            errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger)
+        summary.text_llm_calls += result.llm_calls
+        for warning in result.warnings:
+            self.logger.warning("Envanter uyarısı: %s — %s", rel, warning)
+        self.cancel_token.checkpoint()
+        return result.record, self._summary_values(rel, record, document, summary)
+
+    def _summary_values(self, rel, record, document, summary):
+        fields = self.config.summary.extra_fields
+        if not fields:
+            return {}
+        if self.text is None:
+            self.logger.warning("Envanter uyarısı: %s — analitik sütunlar için metin modeli yok", rel)
+            return {}
+        plan = summary_plan(fields)
+        key = compute_plan_hash(plan, "summary", self.config.mode, text_model=self.text.info,
+                                vision_model=self.vision.info if self.vision else None, uses_text_model=True)
+        path = self.cache.extraction_path(record.sha256, key)
+        extraction = None if self.force else load_extraction(path, record.sha256, key)
+        if extraction is None:
+            config = self.config
+            try:
+                extraction = extract(document, plan, key, self.text.client, config.ollama.max_retries,
+                                     config.models.text_num_ctx, config.models.max_output_tokens,
+                                     errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger,
+                                     checkpoint=self.cancel_token.checkpoint)
+            except DocumentError as exc:
+                self.logger.warning("Envanter uyarısı: %s — analitik sütunlar çıkarılamadı [%s]", rel, exc.error_type)
+                return {}
+            summary.text_llm_calls += extraction.llm_calls
+            extraction = verify_extraction(extraction, document)
+            save_extraction(path, extraction)
+        return analytic_values(extraction, fields)
+
+    def write_summary(self):
+        """§22.1: her belge sonunda ve çalıştırma sonunda state'ten yeniden üretilir. Yazılamazsa (ör. dosya Excel'de
+        açık) belge başarısız sayılmaz; uyarı yazılır ve bir sonraki fırsatta yeniden denenir."""
+        try:
+            write_summary(self.output_dir, self.state.state, self.config.summary.extra_fields,
+                          self.config.output.save_xlsx, self.logger)
+        except OSError as exc:
+            self.logger.warning("papers_summary.csv yazılamadı: %s", exc)
 
     def _load_or_parse(self, pdf, record, summary):
         signature = self.ocr_settings.signature if self.ocr_settings else None
@@ -427,4 +497,5 @@ class BatchProcessor:
         summary.failed += 1
         self.logger.error("Başarısız [%s/%s]: %s (deneme %d) — %s", outcome.stage.value, outcome.error_type,
                           relative_path, attempt, outcome.message)
+        self.write_summary()
         self.events.on_document_end(relative_path, DocumentStatus.failed, [], None, error=outcome.message)

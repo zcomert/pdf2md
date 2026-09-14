@@ -90,6 +90,22 @@ def is_catalog_field(key):
     return key in FIELDS or key == FULL_CONVERSION
 
 
+DERIVED_BEST_PREFIX = "results.best_"
+
+
+def derived_metric(key):
+    """`results.best_accuracy` → `accuracy`; katalogdaki `results.best_model` türetilmiş metrik değildir."""
+    if key.startswith(DERIVED_BEST_PREFIX) and key not in FIELDS:
+        metric = key[len(DERIVED_BEST_PREFIX):]
+        return metric if re.fullmatch(r"[a-z0-9_]+", metric) else None
+    return None
+
+
+def is_summary_field(key):
+    """`summary.extra_fields` için geçerli anahtar: katalog alanı veya `results.best_<metrik>` (§22.4)."""
+    return key in FIELDS or derived_metric(key) is not None
+
+
 def is_valid_field(key):
     return is_catalog_field(key) or (key.startswith(CUSTOM_PREFIX) and len(key) > len(CUSTOM_PREFIX))
 

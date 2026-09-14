@@ -18,8 +18,9 @@ from .pdf_discovery import discover, sync_with_state
 from .llm_client import TextClient
 from .model_clients import ModelUnavailable
 from .ollama_backend import OllamaBackend
-from .prompt_planner import PlanContext, compute_plan_hash, create_plan, describe_plan, filter_targets
-from .preflight import check_gpu, check_models, check_ocr, raise_on_errors, run_preflight
+from .prompt_planner import (PlanContext, compute_plan_hash, create_plan, describe_plan, filter_targets,
+                             summary_signature)
+from .preflight import check_gpu, check_models, check_ocr, check_xlsx, raise_on_errors, run_preflight
 from .vision_client import VisionClient
 from .schemas import RunSummary
 from .state_manager import OutputLock, StateManager
@@ -121,7 +122,8 @@ def _plan_context(config, input_path, pdf_count):
 
 
 def make_plan(prompt, context, config, backend, models, logger, cache_root=None, write_cache=True, force=False):
-    """İşleme planı ve plan hash'i. Varsayılan prompt metin modelini çağırmaz. Döner: (PlanResult, plan_hash, TextClient|None)."""
+    """İşleme planı ve hash'leri. Varsayılan prompt metin modelini çağırmaz. Döner: (PlanResult, plan_hash (atlama
+    kuralı, envanter ayarları dahil), TextClient|None, içerik hash'i (çıkarım önbelleği))."""
     text_model = models.get("text")
     text_client = None
     if text_model is not None:
@@ -131,9 +133,11 @@ def make_plan(prompt, context, config, backend, models, logger, cache_root=None,
     result = create_plan(prompt, context, text_client, text_model, cache_dir=cache_dir, write_cache=write_cache,
                          force=force, errors_dir=cache_dir / "errors" if cache_dir and write_cache else None,
                          logger=logger)
-    plan_hash = compute_plan_hash(result.plan, prompt.sha256, config.mode, text_model=text_model,
-                                  vision_model=models.get("vision"), uses_text_model=result.uses_text_model)
-    return result, plan_hash, text_client
+    hash_args = dict(text_model=text_model, vision_model=models.get("vision"), uses_text_model=result.uses_text_model)
+    content_hash = compute_plan_hash(result.plan, prompt.sha256, config.mode, **hash_args)
+    plan_hash = compute_plan_hash(result.plan, prompt.sha256, config.mode, **hash_args,
+                                  summary=summary_signature(config.summary, text_model))
+    return result, plan_hash, text_client, content_hash
 
 
 def _log_plan(logger, result, plan_hash):
@@ -152,7 +156,7 @@ def run_plan_only(prompt, config, input_path, output_dir, backend, models, logge
     result = discover(input_path, config.recursive, config.include)
     context = _plan_context(config, input_path, len(result.documents))
     try:
-        plan_result, plan_hash, _ = make_plan(prompt, context, config, backend, models, logger,
+        plan_result, plan_hash, _, _ = make_plan(prompt, context, config, backend, models, logger,
                                               cache_root=output_dir / "_cache", write_cache=False, force=force)
     except ModelUnavailable as exc:
         _print_error(exc)
@@ -214,6 +218,9 @@ def main(argv=None, events=None, cancel_token=None):
         model_checks, models = check_models(config, backend)
         checks.extend(model_checks)
         checks.append(check_gpu())
+        xlsx_check = check_xlsx(config)
+        if xlsx_check is not None:
+            checks.append(xlsx_check)
         _log_checks(logger, checks)
         raise_on_errors(checks)
     except PreflightError as exc:
@@ -272,7 +279,8 @@ def main(argv=None, events=None, cancel_token=None):
                 logger.info("Model (%s): %s", role, info.reference)
         context = _plan_context(config, input_path, len(result.documents))
         try:
-            plan_result, plan_hash, text_client = make_plan(prompt, context, config, backend, models, logger,
+            plan_result, plan_hash, text_client, content_hash = make_plan(prompt, context, config, backend, models,
+                                                                          logger,
                                                             cache_root=output_dir / "_cache", force=args.force)
         except ModelUnavailable as exc:
             raise PreflightError(f"Plan oluşturulamadı: {exc}") from exc
@@ -295,6 +303,7 @@ def main(argv=None, events=None, cancel_token=None):
         processor = BatchProcessor(config, state, CacheManager(output_dir), output_dir, run_id, logger, prompt,
                                    force=args.force, events=events or ConsoleEvents(), cancel_token=token,
                                    ocr_settings=ocr_settings, vision=vision, plan=plan_result.plan, plan_hash=plan_hash,
+                                   content_hash=content_hash,
                                    text=TextSetup(text_client, models["text"]) if text_client is not None else None)
         cancelled = False
         stopped = None
@@ -309,6 +318,7 @@ def main(argv=None, events=None, cancel_token=None):
         summary.failed += summary.discovery_failed
         summary.finished_at = datetime.now().isoformat(timespec="seconds")
         state.record_run(summary)
+        processor.write_summary()  # §22.1: çalıştırma sonunda da (keşif hataları ve atlanan belgeler dahil)
         for line in summary_lines(summary, cancelled):
             logger.info(line)
             print(line)

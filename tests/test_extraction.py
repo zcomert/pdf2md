@@ -372,10 +372,12 @@ def test_prompt_answer_end_to_end(tmp_input_copy, tmp_output, no_ocr_config, fak
     # §38 kriter 2: belge klasöründe yalnızca .md
     assert [p.name for p in markdown_path.parent.iterdir()] == [markdown_path.name]
     # §38 kriter 23: çıkarım şemadan geçer
-    extraction_file = tmp_output / "_cache" / record["sha256"] / "extractions" / f"{record['plan_hash'][:32]}.json"
-    Extraction.model_validate_json(extraction_file.read_text(encoding="utf-8"))
+    extraction_files = list((tmp_output / "_cache" / record["sha256"] / "extractions").glob("*.json"))
+    assert extraction_files
+    for extraction_file in extraction_files:
+        Extraction.model_validate_json(extraction_file.read_text(encoding="utf-8"))
     run = next(iter(state["runs"].values()))
-    assert run["text_llm_calls"] == 2  # plan + çıkarım
+    assert run["text_llm_calls"] == 3  # plan + çıkarım + künye
 
 
 def test_prompt_change_reuses_parse_and_second_run_skips(tmp_input_copy, tmp_output, no_ocr_config, fake_model_backend,

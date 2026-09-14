@@ -36,6 +36,16 @@ class HistoryEntry(StrictModel):
     run_id: str | None = None
 
 
+class Bibliographic(StrictModel):
+    """Künye (§22.3). `sources`: alan → metadata | doi_regex | parser | extraction | llm."""
+    title: str | None = None
+    authors: list[str] = []
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    sources: dict[str, str] = {}
+
+
 class DocumentState(StrictModel):
     sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     size_bytes: int | None = Field(None, ge=0)
@@ -54,6 +64,14 @@ class DocumentState(StrictModel):
     error_type: str | None = None
     error: str | None = None
     history: list[HistoryEntry] = []
+    # Envanter (§22.2) için belge sayıları ve künye; önbellek silinse de CSV eksiksiz üretilir.
+    pages: int | None = None
+    scanned_pages: int | None = None
+    ocr_pages: int | None = None
+    vision_calls: int | None = None
+    text_llm_calls: int | None = None
+    bibliographic: Bibliographic | None = None
+    summary_values: dict[str, str] = {}
 
 
 class CollectionState(StrictModel):
