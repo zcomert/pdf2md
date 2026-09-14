@@ -7,3 +7,6 @@ tests/_tmp/
 *_output/
 reports/eval_work/
 reports/bench_work/
+tests/fixtures/real/
+tests/fixtures/real
+tests/fixtures/real/*.pdf
