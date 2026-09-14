@@ -1,5 +1,11 @@
 # pdf2md — Yerel Akademik PDF İşleme ve Bilgi Çıkarımı
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
+pdf2md, akademik PDF koleksiyonlarını yerel olarak Markdown'a dönüştüren ve isteğe
+bağlı olarak kaynak gösterilebilir bilgi çıkarımı yapan açık kaynaklı bir Python
+uygulamasıdır.
+
 Bir klasördeki (veya tek bir) akademik PDF'i tamamen yerel olarak işler. İki şekilde çalışır:
 
 - **Prompt verilmezse** her PDF için tam Markdown dönüşümü üretir. Başlıklar, tablolar, LaTeX formüller, şekil başlıkları ve kaynakça korunur.
@@ -17,6 +23,43 @@ Model çağrıları yalnızca yerel Ollama servisine (`127.0.0.1`) gider; PDF i�
 - **Envanter:** `papers_summary.csv` dosyası künye, durum, sayfa/çağrı sayıları ve isteğe bağlı analitik sütunları içerir.
 - **Sağlamlık:** SHA-256 ile değişiklik tespiti ve önbellek, kesinti sonrası devam, eşzamanlı çalıştırma kilidi, atomik yazım
 - **Arayüzler:** komut satırı ve basit masaüstü arayüzü (tkinter)
+
+## Markdown ve Yapay Zeka
+
+Markdown bu projede yalnızca son çıktı biçimi değildir; PDF içeriğinin yapısal,
+taşınabilir ve yapay zeka tarafından işlenebilir ara temsilidir. Başlıklar,
+tablolar, formüller ve şekiller anlamlı Markdown öğelerine dönüştürülür; sayfa
+işaretleri (`<!-- page: n -->`), blok kimlikleri ve front matter kaynak izini
+korur. LLM yalnızca belge bağlamından çıkarım yapar; `evidence_verifier.py`
+iddiaları kaynak metinle karşılaştırır ve doğrulanamayan değerleri işaretler.
+
+Bu nedenle Markdown; insan incelemesi, Git tabanlı sürümleme, arama ve gelecekteki
+RAG/embedding iş akışları için ortak sözleşmedir.
+
+## Sistem Mimarisi
+
+```mermaid
+flowchart LR
+    A[PDF / Klasör] --> B[Keşif ve SHA-256]
+    B --> C[PDF Ayrıştırma]
+    C --> D{Sayfa türü}
+    D --> E[Metin katmanı]
+    D --> F[Tesseract OCR]
+    D --> G[Vision modeli]
+    E --> H[Yapısal belge modeli]
+    F --> H
+    G --> H
+    H --> I[Markdown üretimi]
+    H --> J[Prompt planlama]
+    J --> K[LLM çıkarımı]
+    K --> L[Kanıt doğrulama]
+    L --> M[Markdown / CSV / XLSX]
+```
+
+CLI ve Tkinter GUI aynı çalışma çekirdeği olan `src/runner.py` dosyasını kullanır.
+Keşif, ayrıştırma, OCR/görsel analiz, yerel Ollama istemcisi, prompt planlama,
+çıkarım, kanıt doğrulama ve çıktı üretimi ayrı modüllerdedir. Durum yönetimi,
+SHA-256 önbelleği, kilit ve atomik yazım kesinti sonrası devam etmeyi sağlar.
 
 ## Kurulum
 
@@ -307,3 +350,13 @@ Donanım: NVIDIA RTX 4500 Ada (24 GB), Tesseract 5.4, `gemma4:latest`, `minicpm-
 
 - **Kabul matrisi:** `tests/acceptance/MATRIX.md`
 - **Gelecek (embedding/RAG):** `docs/future-rag.md`
+
+## Açık Kaynak ve Lisans
+
+Kaynak kodu Apache License 2.0 altında dağıtılır. Ayrıntılar için [LICENSE](LICENSE)
+dosyasına bakın. Katkı göndermeden önce [CONTRIBUTING.md](CONTRIBUTING.md) ve
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) dosyalarını okuyun.
+
+Python bağımlılıkları, Tesseract, Ollama ve indirilen yapay zeka modelleri kendi
+lisanslarına tabidir; proje lisansı bu bileşenlerin lisansını değiştirmez. Ayrıntılar
+için [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) dosyasına bakın.
