@@ -179,11 +179,11 @@ def test_unstructured_table_renders_image_raw_text_and_marker():
 
 def test_equation_rendering():
     raw = Equation(id="eq-1", number="1", raw_text="z = (x - mu) / s  (1)", page=1, bbox=(0, 0, 1, 1))
-    latex = Equation(id="eq-2", number="2", latex="z = \frac{x-\mu}{s}", latex_valid=False, page=1, bbox=(0, 0, 1, 1))
+    latex = Equation(id="eq-2", number="2", latex=r"z = \frac{x-\mu}{s}", latex_valid=False, page=1, bbox=(0, 0, 1, 1))
     document = visual_document(equations=[raw, latex], blocks=[ref_block(0, BlockType.equation, "eq-1"),
                                                                 ref_block(1, BlockType.equation, "eq-2")])
     assert build_full_conversion(document, plain()) == (
-        "```text\nz = (x - mu) / s  (1)\n```\n\n[latex_unavailable]\n\n$$\nz = \frac{x-\mu}{s}\n$$ [latex_unverified]\n")
+        r"```text" + "\nz = (x - mu) / s  (1)\n" + r"```" + "\n\n[latex_unavailable]\n\n$$\n" + r"z = \frac{x-\mu}{s}" + "\n$$ [latex_unverified]\n")
 
 
 def test_figure_rendering_and_unavailable_marker():
