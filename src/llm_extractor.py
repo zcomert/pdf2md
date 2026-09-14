@@ -19,7 +19,7 @@ from .schemas import (Conflict, ConflictValue, EquationSelection, Evidence, Extr
 EXTRACTOR_VERSION = "1"
 # Doğrulama kuralları değişince artırılır: önbellekteki çıkarımlar eski kurallarla doğrulanmış sayılır ve yeniden yapılır.
 # 2: tablo kanıtında model satırı kuralı, liste maddelerinin kanıt birleşiminde aranması (Faz 12)
-VERIFIER_VERSION = "2"
+VERIFIER_VERSION = "3"
 MAX_SPLIT_DEPTH = 2  # kesilen yanıtta parça en fazla iki kez ikiye bölünür
 LIST_TYPES = {"list[str]"}
 RESULT_TYPES = {"results"}
@@ -426,6 +426,48 @@ class SourceIndex:
         matched = [row for row in rows if needle and needle in _alnum(row)]
         return "\n".join(matched) if matched else None
 
+    def table_cell_for(self, block_id, name, metric):
+        """Tablo kanıtında metriğin sütunu tek anlamlı belirlenebiliyorsa modelin satır(lar)ındaki o sütunun hücre
+        metinleri; belirlenemezse None.
+
+        Çok düzeyli başlıklar düzleştirilir: boş başlık hücresi soldaki başlığı sürdürür (colspan), ilk hücresi boş ve
+        sayı içermeyen sonraki satırlar alt başlık olarak sütun etiketine eklenir ("F score" + "Ambiguous")."""
+        block = self.blocks.get(block_id or "")
+        table = self.tables.get(block.ref_id) if block is not None and block.type == BlockType.table else None
+        if table is None or not table.cells or not name or not metric:
+            return None
+        rows = [[cell or "" for cell in row] for row in table.cells]
+        width = max(len(row) for row in rows)
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        header_count = 1
+        while (header_count < len(rows) and not rows[header_count][0].strip()
+               and not any(number_tokens(cell) for cell in rows[header_count])):
+            header_count += 1
+        labels = [""] * width
+        for level, header in enumerate(rows[:header_count]):
+            current = ""
+            for column, cell in enumerate(header):
+                if cell.strip():
+                    current = cell
+                spanned = current if column and header_count > 1 and level < header_count - 1 else cell
+                labels[column] = f"{labels[column]} {spanned}".strip()
+        data = rows[header_count:]
+        needle = _alnum(name)
+        if not needle:
+            return None
+        # Ad birden çok satıra uyuyorsa ("Bi-LSTM" → MFCC-Bi-LSTM, Stat-Bi-LSTM…) değer bu satırlardan birinin
+        # sütun hücresinde olmalıdır.
+        candidates = [r for r in data if _alnum(r[0]) == needle] or [r for r in data if needle in _alnum(r[0])]
+        if not candidates:
+            return None
+        wanted = _tokens(metric)
+        scores = [(_jaccard(wanted, _tokens(labels[c])), c) for c in range(1, width)]
+        best = max((score for score, _ in scores), default=0.0)
+        columns = [c for score, c in scores if score == best]
+        if best < 0.5 or len(columns) != 1:
+            return None
+        return "\n".join(row[columns[0]] for row in candidates)
+
     def page_text(self, page):
         parts = [self.block_text(b) for b in self.document.blocks if b.page == page]
         return "\n".join(parts)
@@ -468,11 +510,27 @@ def _alnum(text):
     return re.sub(r"[\W_]+", "", (text or "").casefold())
 
 
-def _verify(index, evidence, value_text, value, row_name=None, row_value=None):
+def _unique(items):
+    return items[0] if len(items) == 1 else None
+
+
+F_SCORE_RE = re.compile(r"\bf[\s_-]*1?[\s_-]*(?:score|measure)\b|\bf1\b")
+
+
+def _tokens(text):
+    text = F_SCORE_RE.sub("f1", (text or "").casefold())  # F1-Score, F score, F-measure → f1
+    return set(re.findall(r"[^\W_]+", text))
+
+
+def _jaccard(a, b):
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def _verify(index, evidence, value_text, value, row_name=None, row_value=None, metric=None):
     """Döner: (zenginleştirilmiş kanıtlar, verification|None, yöntemler, metin kanıtta mı).
 
-    `row_name`/`row_value`: sonuçlarda tablo kanıtı varsa değer, model adının geçtiği satır(lar)da aranır; tablonun
-    başka bir satırındaki aynı sayı doğrulama saymaz. Sütun (metrik) eşleşmesi kontrol edilmez."""
+    `row_name`/`row_value`/`metric`: sonuçlarda tablo kanıtı varsa, modelin satırı ve metriğin sütunu tek anlamlı
+    belirlenebildiğinde değer yalnızca o hücrede aranır; belirlenemezse model adının geçtiği satır(lar)da aranır."""
     resolved = [index.resolve(e) for e in evidence]
     enriched = [item[0] for item in resolved]
     sources = []
@@ -480,9 +538,14 @@ def _verify(index, evidence, value_text, value, row_name=None, row_value=None):
         if text is None:
             continue
         if row_name and row_value and item.table:
-            rows = index.table_rows_for(item.block_id, row_name)
-            if rows is not None and not numbers_in_source(row_value, rows)[1]:
-                text = rows  # değer modelin satırında yoksa bu kanıt değeri desteklemez
+            cell = index.table_cell_for(item.block_id, row_name, metric)
+            if cell is not None:
+                if not numbers_in_source(row_value, cell)[1]:
+                    text = cell  # değer modelin satırı × metriğin sütunundaki hücrede yoksa kanıt desteklemez
+            else:
+                rows = index.table_rows_for(item.block_id, row_name)
+                if rows is not None and not numbers_in_source(row_value, rows)[1]:
+                    text = rows  # değer modelin satırında yoksa bu kanıt değeri desteklemez
         sources.append((text, method))
     claim = value_text if value_text else (" ".join(map(str, value)) if isinstance(value, list) else str(value or ""))
     has_numbers = bool(number_tokens(claim))
@@ -529,7 +592,8 @@ def verify_extraction(extraction, document):
         # value_text ve iddia metnindeki tüm sayılar doğrulanır (iddia cümlesi de A.md'ye yazılabilir).
         claim = " ".join(part for part in (result.value_text, result.claim) if part)
         result.evidence, verification, methods, supported = _verify(index, result.evidence, claim, result.claim,
-                                                                    row_name=result.model, row_value=result.value_text)
+                                                                    row_name=result.model, row_value=result.value_text,
+                                                                    metric=result.metric)
         result.verification = verification or ("verified" if supported else
                                                 "source_not_found" if not any(e.resolved for e in result.evidence)
                                                 else "unverified")

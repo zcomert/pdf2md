@@ -1,0 +1,61 @@
+# Referans veri — 2025_Polle_Meta.pdf (§38.1). TASLAK: Claude tarafından PDF metni ve sayfa görüntülerinden
+# elle hazırlandı (pipeline çıktısı kullanılmadı); kullanıcı onayı bekliyor. Sayfa numaraları PDF sayfasıdır.
+# Tablo hücreleri basıldığı gibidir (".777[.040]" = ortalama [standart sapma]).
+source: real/2025_Polle_Meta.pdf
+sha256: "e4be237d19c263fc540e117a96d5223123d939988654532403266f37642ead5b"
+kind: real
+bibliographic:
+  title: "Meta-Learning Approaches for Speaker-Dependent Voice Fatigue Models"
+  authors: ["Roseline Polle", "Agnes Norbury", "Alexandra Livia Georgescu", "Nicholas Cummins", "Stefano Goria"]
+  year: 2025
+  venue: "Interspeech"
+  doi: "10.21437/Interspeech.2025-2055"
+tables:
+  - number: "1b"
+    page: 2
+    caption: "Table 1: Dataset Characteristics — (b) Target Variable Characteristics"
+    header: ["Characteristic", "Value", "Distribution"]
+    rows:
+      - ["Total Samples", "10,286", "(100%)"]
+      - ["Time Since Sleep (S - hours)", "8[6]", "avg[std]"]
+      - ["Fatigued (S ≥ 10)", "4,671", "(45.4%)"]
+      - ["Not fatigued (S < 10)", "5,615", "(54.6%)"]
+  - number: "2"
+    page: 3
+    caption: "Table 2: Performance averaged for points with 6 and 7 previous observations."
+    header: ["Metric", "Dist", "Proto", "Tr", "CS", "ME"]
+    rows:
+      - ["auc", ".755[.034]", ".763[.049]", ".777[.040]", ".679[.036]", ".721[.020]"]
+      - ["bacc", ".684[.041]", ".694[.044]", ".706[.034]", ".627[.032]", ".657[.018]"]
+      - ["rec", ".671[.060]", ".666[.071]", ".690[.078]", ".606[.057]", ".630[.029]"]
+      - ["prec", ".640[.058]", ".664[.064]", ".671[.056]", ".582[.052]", ".618[.027]"]
+      - ["rho", ".500[.056]", "n/a", ".546[.069]", ".373[.069]", ".442[.028]"]
+      - ["RMSE", "5.32[.27]", "n/a", "5.04[.31]", "5.59[.28]", "5.38[.09]"]
+equations:
+  - number: "1"
+    page: 3
+    latex: "\\Delta y = f_d(x_j - x_t)"
+    description: "Distance-based model: difference prediction"
+  - number: "2"
+    page: 3
+    latex: "y_t^i = \\begin{cases} f_{cs}(x_t^i) & \\text{if } t = 0 \\\\ \\frac{1}{|S_t^i|} \\sum_{j \\in S_t^i} (y_j^i + f_d(x_t^i - x_j^i)) & \\text{otherwise} \\end{cases}"
+    description: "Distance-based model prediction for a new observation"
+  - number: "3"
+    page: 3
+    latex: "c_k^i = \\frac{1}{|S_{t,k}^i|} \\sum_{j \\in S_{t,k}^i} g(x_j^i)"
+    description: "Prototypical network class prototype"
+  - number: "4"
+    page: 3
+    latex: "[x_0^i, y_0^i, x_1^i, y_1^i, \\ldots, x_t^i]"
+    description: "Transformer input sequence"
+results:
+  - {model: "Transformer-based model", metric: "AUC", value: 0.777, page: 3, table: "Table 2"}
+  - {model: "Transformer-based model", metric: "Pearson correlation", value: 0.546, page: 3, table: "Table 2"}
+  - {model: "Transformer-based model", metric: "balanced accuracy", value: 0.706, page: 3, table: "Table 2"}
+  - {model: "Transformer-based model", metric: "RMSE", value: 5.04, page: 3, table: "Table 2"}
+  - {model: "Prototypical network", metric: "AUC", value: 0.763, page: 3, table: "Table 2"}
+  - {model: "Distance-based model", metric: "AUC", value: 0.755, page: 3, table: "Table 2"}
+  - {model: "Cross-sectional model", metric: "AUC", value: 0.679, page: 3, table: "Table 2"}
+  - {model: "Mixed-effects model", metric: "AUC", value: 0.721, page: 3, table: "Table 2"}
+  - {model: "Transformer-based model", metric: "AUC", value: 0.78, page: 3}
+  - {model: "Transformer-based model", metric: "Pearson correlation", value: 0.55, page: 3}

@@ -1,0 +1,5 @@
+# Test fixture'ları bayt düzeyinde korunur: SHA-256 değerleri referans veride ve üretici testinde karşılaştırılır.
+# Windows'ta core.autocrlf, metin olarak algılanan fixture'ların (ör. not_a_pdf.PDF) satır sonlarını değiştiriyordu.
+tests/fixtures/** -text
+*.pdf binary
+*.PDF binary

@@ -16,6 +16,17 @@ def pytest_configure(config):
     fitz.TOOLS.mupdf_display_errors(False)  # bozuk fixture'lar için beklenen MuPDF mesajlarını gizle
     config.addinivalue_line("markers", "requires_tesseract: Tesseract kurulu değilse testi atlar")
     config.addinivalue_line("markers", "requires_ollama: yerel Ollama servisi erişilemiyorsa testi atlar")
+    config.addinivalue_line("markers", "acceptance: §38/§41.4 kabul kriterlerine eşlenen test (tests/acceptance)")
+
+
+def pytest_collection_modifyitems(config, items):
+    """`tests/acceptance/criteria.py`'deki eşlemeye göre `acceptance` işareti: `pytest -m acceptance`."""
+    from tests.acceptance.criteria import acceptance_node_ids
+    wanted = acceptance_node_ids()
+    for item in items:
+        node = item.nodeid.split("[", 1)[0].replace("\\", "/")
+        if node in wanted or node.startswith("tests/acceptance/"):
+            item.add_marker(pytest.mark.acceptance)
 
 
 @functools.cache

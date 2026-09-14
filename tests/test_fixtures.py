@@ -154,7 +154,8 @@ def test_reference_yaml_is_valid(path):
 def test_real_reference_requires_minimums():
     from pydantic import ValidationError
     from tests.reference_schema import ReferenceData
-    data = load_reference(reference_files()[0]).model_dump()
+    synthetic = next(path for path in reference_files() if path.name == "synthetic_table_equation.yaml")
+    data = load_reference(synthetic).model_dump()  # 2 formüllü sentetik referans gerçek sayılınca eksik kalır
     data["kind"] = "real"
     with pytest.raises(ValidationError, match="en az"):
         ReferenceData.model_validate(data)

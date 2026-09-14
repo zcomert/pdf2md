@@ -1,0 +1,71 @@
+# Referans veri — 2024_Pokorny_VocDoc.pdf (§38.1). TASLAK: Claude tarafından PDF metni ve sayfa görüntülerinden
+# elle hazırlandı (pipeline çıktısı kullanılmadı); kullanıcı onayı bekliyor. Sayfa numaraları PDF sayfasıdır.
+# Makalede sayısal sonuçlar tabloda değil metinde (s. 6) verilir; Tablo 2 yalnızca ilk 4 senaryo satırını içerir.
+source: real/2024_Pokorny_VocDoc.pdf
+sha256: "84a21be50a9b2a23646cb5800036a23333439543c9bb50a3f2ebed79aa90699d"
+kind: real
+bibliographic:
+  title: "VocDoc, what happened to my voice? Towards automatically capturing vocal fatigue in the wild"
+  authors: ["Florian B. Pokorny", "Julian Linke", "Nico Seddiki", "Simon Lohrmann", "Claus Gerstenberger",
+            "Katja Haspl", "Marlies Feiner", "Florian Eyben", "Martin Hagmüller", "Barbara Schuppler", "Gernot Kubin",
+            "Markus Gugatschka"]
+  year: 2024
+  venue: "Biomedical Signal Processing and Control"
+  doi: "10.1016/j.bspc.2023.105595"
+tables:
+  - number: "1"
+    page: 2
+    caption: "Table 1 Dataset overview in terms of gender, age, number of recordings, and recording duration per speaker."
+    header: ["Subset", "Speaker ID", "Gender", "Age [years]", "# Recordings", "Duration [min]"]
+    rows:
+      - ["pilotSet", "101M", "m", "30", "1", "90"]
+      - ["pilotSet", "102M", "m", "31", "1", "90"]
+      - ["pilotSet", "103M", "m", "30", "1", "90"]
+      - ["pilotSet", "104M", "m", "50", "1", "90"]
+      - ["extension", "111M", "m", "49", "2", "(1) 91; (2) 95"]
+      - ["extension", "114F", "f", "(1) 28; (2) 29", "2", "(1) 99; (2) 91"]
+  - number: "2"
+    page: 4
+    caption: "Table 2 Training and test sets per scenario and validation run with respect to speaker IDs."
+    header: ["Scenario", "Training", "Test"]
+    rows:
+      - ["SD", "101M", "101M"]
+      - ["SD", "102M", "102M"]
+      - ["SD", "103M", "103M"]
+      - ["SD", "104M", "104M"]
+      - ["SI", "{102M, 103M, 104M}", "101M"]
+      - ["SI", "{101M, 103M, 104M}", "102M"]
+      - ["SI", "{101M, 102M, 104M}", "103M"]
+      - ["SI", "{101M, 102M, 103M}", "104M"]
+      - ["SIP", "{101M, 102M, 103M, 104M}+111M", "111M"]
+      - ["SIP", "{101M, 102M, 103M, 104M}+114F", "114F"]
+equations:
+  - number: "1"
+    page: 4
+    latex: "\\text{F1 score} = 2 \\cdot \\frac{\\text{precision} \\cdot \\text{recall}}{\\text{precision} + \\text{recall}}"
+    description: "F1 score"
+  - number: "2"
+    page: 4
+    latex: "\\hat{\\mathbf{i}} = \\frac{1}{N_S} \\sum_{s=1}^{N_S} \\frac{1}{N_T} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t} = \\frac{1}{N_S \\cdot N_T} \\sum_{s=1}^{N_S} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t}"
+    description: "Averaged feature importances"
+  - number: "3"
+    page: 4
+    latex: "\\mathrm{I} = \\{i_1, \\ldots, i_{N_F}\\}"
+    description: "Ordered set of feature importance components"
+  - number: "4"
+    page: 4
+    latex: "\\mathrm{I}_{(-M)} = \\max(m : \\#\\{i \\in \\mathrm{I} : i \\geq m\\} = M)"
+    description: null
+  - number: "5"
+    page: 4
+    latex: "\\mathrm{I}^{(M)} = \\{i \\in \\mathrm{I} : i \\leq \\mathrm{I}_{(-M)}\\}"
+    description: null
+results:
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.71, page: 6, dataset: "speaker 101M"}
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.64, page: 6, dataset: "speaker 104M"}
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.45, page: 6, dataset: "speaker 102M, block S1"}
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.78, page: 6, dataset: "speaker 102M, last block"}
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.52, page: 6, dataset: "speaker 103M, block S1"}
+  - {model: "Random forest (SD)", metric: "mean F1 score", value: 0.65, page: 6, dataset: "speaker 103M, block S8"}
+  - {model: "Random forest (SIP)", metric: "mean F1 score", value: 0.42, page: 6, dataset: "speaker 111M, block S6"}
+  - {model: "Random forest (SIP)", metric: "mean F1 score", value: 0.47, page: 6, dataset: "speaker 114F, block S6"}

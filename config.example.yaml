@@ -39,7 +39,8 @@ output:
   citation_style: "(s. {page}{table_or_figure})"
   save_xlsx: false
 summary:
-  extra_fields: []
+  extra_fields: []          # ör. [dataset.name, results.best_accuracy]
+  bibliographic_llm: true   # künyede eksik alanlar için kısa metin LLM çağrısı
 logging:
   level: INFO
   log_model_content: false

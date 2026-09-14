@@ -1,0 +1,123 @@
+{
+  "generated": "2026-09-14T13:08:47",
+  "input": "D:\\programs\\pdf2md\\tests\\fixtures\\real",
+  "hardware": {
+    "gpu": "GPU: NVIDIA RTX 4500 Ada Generation, VRAM 24570 MiB (8108 MiB boş)",
+    "ocr": "Tesseract v5.4.0.20240606 (C:\\Program Files\\Tesseract-OCR\\tessdata), diller: eng",
+    "models": {
+      "gemma4:latest": "gemma4:latest@sha256:c6eb396dbd5992bbe3f5cdb947e8bbc0ee413d7c17e2beaae69f5d569cf982eb",
+      "minicpm-v4.5:8b": "minicpm-v4.5:8b@sha256:0c40168f46d1cbf5cec399d8ced34b6d3347a79f69306866efa44203c08eeda3"
+    }
+  },
+  "warm_prompt": "Başlık, veri seti ve en iyi sonuçları çıkar.",
+  "modes": {
+    "fast": {
+      "cold": {
+        "exit_code": 0,
+        "wall_sec": 110.5,
+        "run_sec": 110.19,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 0.83,
+        "vision_calls": 0,
+        "text_llm_calls": 9,
+        "vision_calls_per_doc": 0.0,
+        "text_calls_per_doc": 1.0,
+        "ocr_pages": 6,
+        "parsed": 9,
+        "parsed_from_cache": 0
+      },
+      "warm": {
+        "exit_code": 0,
+        "wall_sec": 513.6,
+        "run_sec": 505.02,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 3.82,
+        "vision_calls": 0,
+        "text_llm_calls": 19,
+        "vision_calls_per_doc": 0.0,
+        "text_calls_per_doc": 2.1,
+        "ocr_pages": 6,
+        "parsed": 0,
+        "parsed_from_cache": 9
+      }
+    },
+    "balanced": {
+      "cold": {
+        "exit_code": 0,
+        "wall_sec": 625.6,
+        "run_sec": 625.11,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 4.73,
+        "vision_calls": 64,
+        "text_llm_calls": 9,
+        "vision_calls_per_doc": 7.1,
+        "text_calls_per_doc": 1.0,
+        "ocr_pages": 6,
+        "parsed": 9,
+        "parsed_from_cache": 0
+      },
+      "warm": {
+        "exit_code": 0,
+        "wall_sec": 574.4,
+        "run_sec": 566.12,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 4.29,
+        "vision_calls": 10,
+        "text_llm_calls": 19,
+        "vision_calls_per_doc": 1.1,
+        "text_calls_per_doc": 2.1,
+        "ocr_pages": 6,
+        "parsed": 0,
+        "parsed_from_cache": 9
+      }
+    },
+    "full": {
+      "cold": {
+        "exit_code": 0,
+        "wall_sec": 890.2,
+        "run_sec": 889.8,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 6.74,
+        "vision_calls": 129,
+        "text_llm_calls": 9,
+        "vision_calls_per_doc": 14.3,
+        "text_calls_per_doc": 1.0,
+        "ocr_pages": 6,
+        "parsed": 9,
+        "parsed_from_cache": 0
+      },
+      "warm": {
+        "exit_code": 0,
+        "wall_sec": 567.8,
+        "run_sec": 559.45,
+        "documents": 9,
+        "processed": 9,
+        "failed": 0,
+        "pages": 132,
+        "sec_per_page": 4.24,
+        "vision_calls": 14,
+        "text_llm_calls": 19,
+        "vision_calls_per_doc": 1.6,
+        "text_calls_per_doc": 2.1,
+        "ocr_pages": 6,
+        "parsed": 0,
+        "parsed_from_cache": 9
+      }
+    }
+  }
+}

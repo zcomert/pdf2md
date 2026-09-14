@@ -1,0 +1,747 @@
+{
+  "generated": "2026-09-14T12:57:41",
+  "prompt": "Makaledeki tüm sayısal sonuçları (model, metrik, değer ve veri seti) çıkar.",
+  "modes": {
+    "fast": {
+      "papers": [
+        {
+          "paper": "2024_Pokorny_VocDoc.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 2,
+              "cells": 36,
+              "matched": 0,
+              "cells_in_text": 36,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "2",
+              "page": 4,
+              "cells": 30,
+              "matched": 0,
+              "cells_in_text": 30,
+              "cell_accuracy": 0.0,
+              "structured": false
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "2",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "3",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "4",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "5",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            }
+          ],
+          "latex_valid_rate": null,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.125,
+            "verified": 1,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Polle_Meta.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1b",
+              "page": 2,
+              "cells": 12,
+              "matched": 0,
+              "cells_in_text": 12,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "2",
+              "page": 3,
+              "cells": 36,
+              "matched": 0,
+              "cells_in_text": 36,
+              "cell_accuracy": 0.0,
+              "structured": false
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "2",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "3",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "4",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            }
+          ],
+          "latex_valid_rate": null,
+          "results": {
+            "reference_results": 10,
+            "recall": 0.2,
+            "verified": 2,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Vekkot_Continuous.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 7,
+              "cells": 32,
+              "matched": 0,
+              "cells_in_text": 7,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "9",
+              "page": 17,
+              "cells": 90,
+              "matched": 0,
+              "cells_in_text": 80,
+              "cell_accuracy": 0.0,
+              "structured": false
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "2",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "3",
+              "page": 10,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            },
+            {
+              "number": "5",
+              "page": 11,
+              "exact": false,
+              "similarity": 0.0,
+              "latex_valid": null,
+              "found": null
+            }
+          ],
+          "latex_valid_rate": null,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.125,
+            "verified": 4,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        }
+      ],
+      "summary": {
+        "title": 1.0,
+        "authors": 1.0,
+        "year": 1.0,
+        "venue": 1.0,
+        "doi": 1.0,
+        "table_cells": 0.0,
+        "table_cells_in_text": 0.852,
+        "equations_exact": 0.0,
+        "equations_similar_0_9": 0.0,
+        "latex_valid": null,
+        "results_recall": 0.15,
+        "verified_results": 7,
+        "table_confirmed_verified": 0,
+        "contradicting_verified": 0
+      }
+    },
+    "balanced": {
+      "papers": [
+        {
+          "paper": "2024_Pokorny_VocDoc.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 2,
+              "cells": 36,
+              "matched": 36,
+              "cells_in_text": 36,
+              "cell_accuracy": 1.0,
+              "structured": true
+            },
+            {
+              "table": "2",
+              "page": 4,
+              "cells": 30,
+              "matched": 30,
+              "cells_in_text": 30,
+              "cell_accuracy": 1.0,
+              "structured": true
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.989,
+              "latex_valid": true,
+              "found": "F1 score = 2 \\cdot \\frac{precision \\cdot recall}{precision + recall}."
+            },
+            {
+              "number": "2",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.981,
+              "latex_valid": true,
+              "found": "\\hat{\\mathbf{i}} = \\frac{1}{N} \\sum_{s=1}^{N_S} \\frac{1}{N_T} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t} = \\frac{1}{N_S \\cdot N_T} \\sum_{s=1}^{N_S} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t},"
+            },
+            {
+              "number": "3",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.95,
+              "latex_valid": true,
+              "found": "I = \\{i_1, \\dots, i_{N_F}\\}."
+            },
+            {
+              "number": "4",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.985,
+              "latex_valid": true,
+              "found": "I_{(-M)} = \\max(m : \\#\\{i \\in I : i \\ge m\\} = M)"
+            },
+            {
+              "number": "5",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.96,
+              "latex_valid": true,
+              "found": "I^{(M)} = \\{ i \\in I : i \\le I_{(-M)} \\}."
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.125,
+            "verified": 1,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Polle_Meta.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1b",
+              "page": 2,
+              "cells": 12,
+              "matched": 0,
+              "cells_in_text": 1,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "2",
+              "page": 3,
+              "cells": 36,
+              "matched": 0,
+              "cells_in_text": 36,
+              "cell_accuracy": 0.0,
+              "structured": false
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 3,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "\\Delta y = f_d(x_j - x_t)"
+            },
+            {
+              "number": "2",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.976,
+              "latex_valid": true,
+              "found": "y_t^i = \\begin{cases} f_{cs}(x_t^i) & \\text{if } t = 0 \\\\[2ex] \\frac{1}{|S_t^i|} \\sum_{j \\in S_t^i} (y_j^i + f_d(x_t^i - x_j^i)) & \\text{otherwise} \\end{cases}"
+            },
+            {
+              "number": "3",
+              "page": 3,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "c_{k}^{i} = \\frac{1}{|S_{t,k}^{i}|} \\sum_{j \\in S_{t,k}^{i}} g(x_{j}^{i})"
+            },
+            {
+              "number": "4",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.877,
+              "latex_valid": true,
+              "found": "[x_0^i, y_0^i, x_1^i, y_1^i, ..., x_t^i]"
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 10,
+            "recall": 0.0,
+            "verified": 0,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Vekkot_Continuous.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 7,
+              "cells": 32,
+              "matched": 0,
+              "cells_in_text": 7,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "9",
+              "page": 17,
+              "cells": 90,
+              "matched": 90,
+              "cells_in_text": 90,
+              "cell_accuracy": 1.0,
+              "structured": true
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.714,
+              "latex_valid": true,
+              "found": "z z \\equiv \\frac{x-u}{s}"
+            },
+            {
+              "number": "2",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.355,
+              "latex_valid": true,
+              "found": "\\phi_{j(x)} = \\Sigma_S [v(S \\bigcup j) - v(S)]/|S|"
+            },
+            {
+              "number": "3",
+              "page": 10,
+              "exact": false,
+              "similarity": 0.977,
+              "latex_valid": true,
+              "found": "SPL = 20 * log \\frac{p}{p_{ref}}"
+            },
+            {
+              "number": "5",
+              "page": 11,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "\\phi_{j(x)} = \\Sigma_S [v(S \\bigcup j) - v(S)]/|S|"
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.375,
+            "verified": 4,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        }
+      ],
+      "summary": {
+        "title": 1.0,
+        "authors": 1.0,
+        "year": 1.0,
+        "venue": 1.0,
+        "doi": 1.0,
+        "table_cells": 0.661,
+        "table_cells_in_text": 0.847,
+        "equations_exact": 0.231,
+        "equations_similar_0_9": 0.769,
+        "latex_valid": 1.0,
+        "results_recall": 0.167,
+        "verified_results": 5,
+        "table_confirmed_verified": 0,
+        "contradicting_verified": 0
+      }
+    },
+    "full": {
+      "papers": [
+        {
+          "paper": "2024_Pokorny_VocDoc.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 2,
+              "cells": 36,
+              "matched": 36,
+              "cells_in_text": 36,
+              "cell_accuracy": 1.0,
+              "structured": true
+            },
+            {
+              "table": "2",
+              "page": 4,
+              "cells": 30,
+              "matched": 30,
+              "cells_in_text": 30,
+              "cell_accuracy": 1.0,
+              "structured": true
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.989,
+              "latex_valid": true,
+              "found": "F1 score = 2 \\cdot \\frac{precision \\cdot recall}{precision + recall}."
+            },
+            {
+              "number": "2",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.981,
+              "latex_valid": true,
+              "found": "\\hat{\\mathbf{i}} = \\frac{1}{N} \\sum_{s=1}^{N_S} \\frac{1}{N_T} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t} = \\frac{1}{N_S \\cdot N_T} \\sum_{s=1}^{N_S} \\sum_{t=1}^{N_T} \\mathbf{i}_{s,t},"
+            },
+            {
+              "number": "3",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.95,
+              "latex_valid": true,
+              "found": "I = \\{i_1, \\dots, i_{N_F}\\}."
+            },
+            {
+              "number": "4",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.985,
+              "latex_valid": true,
+              "found": "I_{(-M)} = \\max(m : \\#\\{i \\in I : i \\ge m\\} = M)"
+            },
+            {
+              "number": "5",
+              "page": 4,
+              "exact": false,
+              "similarity": 0.96,
+              "latex_valid": true,
+              "found": "I^{(M)} = \\{ i \\in I : i \\le I_{(-M)} \\}."
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.125,
+            "verified": 1,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Polle_Meta.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1b",
+              "page": 2,
+              "cells": 12,
+              "matched": 0,
+              "cells_in_text": 1,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "2",
+              "page": 3,
+              "cells": 36,
+              "matched": 0,
+              "cells_in_text": 36,
+              "cell_accuracy": 0.0,
+              "structured": false
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 3,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "\\Delta y = f_d(x_j - x_t)"
+            },
+            {
+              "number": "2",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.976,
+              "latex_valid": true,
+              "found": "y_t^i = \\begin{cases} f_{cs}(x_t^i) & \\text{if } t = 0 \\\\[2pt] \\frac{1}{|S_t^i|} \\sum_{j \\in S_t^i} (y_j^i + f_d(x_t^i - x_j^i)) & \\text{otherwise} \\end{cases}"
+            },
+            {
+              "number": "3",
+              "page": 3,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "c_{k}^{i} = \\frac{1}{|S_{t,k}^{i}|} \\sum_{j \\in S_{t,k}^{i}} g(x_{j}^{i})"
+            },
+            {
+              "number": "4",
+              "page": 3,
+              "exact": false,
+              "similarity": 0.877,
+              "latex_valid": true,
+              "found": "[x_0^i, y_0^i, x_1^i, y_1^i, ..., x_t^i]"
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 10,
+            "recall": 0.0,
+            "verified": 2,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        },
+        {
+          "paper": "2025_Vekkot_Continuous.pdf",
+          "bibliographic": {
+            "title": true,
+            "authors": 1.0,
+            "year": true,
+            "venue": true,
+            "doi": true
+          },
+          "tables": [
+            {
+              "table": "1",
+              "page": 7,
+              "cells": 32,
+              "matched": 0,
+              "cells_in_text": 7,
+              "cell_accuracy": 0.0,
+              "structured": false
+            },
+            {
+              "table": "9",
+              "page": 17,
+              "cells": 90,
+              "matched": 90,
+              "cells_in_text": 90,
+              "cell_accuracy": 1.0,
+              "structured": true
+            }
+          ],
+          "equations": [
+            {
+              "number": "1",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.714,
+              "latex_valid": true,
+              "found": "z z \\equiv \\frac{x-u}{s}"
+            },
+            {
+              "number": "2",
+              "page": 6,
+              "exact": false,
+              "similarity": 0.355,
+              "latex_valid": true,
+              "found": "\\phi_{j(x)} = \\Sigma_S [v(S \\bigcup j) - v(S)]/|S|"
+            },
+            {
+              "number": "3",
+              "page": 10,
+              "exact": false,
+              "similarity": 0.977,
+              "latex_valid": true,
+              "found": "SPL = 20 * log \\frac{p}{p_{ref}}"
+            },
+            {
+              "number": "5",
+              "page": 11,
+              "exact": true,
+              "similarity": 1.0,
+              "latex_valid": true,
+              "found": "\\phi_{j(x)} = \\Sigma_S [v(S \\bigcup j) - v(S)]/|S|"
+            }
+          ],
+          "latex_valid_rate": 1.0,
+          "results": {
+            "reference_results": 8,
+            "recall": 0.0,
+            "verified": 4,
+            "table_confirmed": 0,
+            "contradicting_verified": 0,
+            "contradictions": []
+          }
+        }
+      ],
+      "summary": {
+        "title": 1.0,
+        "authors": 1.0,
+        "year": 1.0,
+        "venue": 1.0,
+        "doi": 1.0,
+        "table_cells": 0.661,
+        "table_cells_in_text": 0.847,
+        "equations_exact": 0.231,
+        "equations_similar_0_9": 0.769,
+        "latex_valid": 1.0,
+        "results_recall": 0.042,
+        "verified_results": 7,
+        "table_confirmed_verified": 0,
+        "contradicting_verified": 0
+      }
+    }
+  }
+}

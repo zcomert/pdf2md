@@ -1,0 +1,69 @@
+# Referans veri — 2025_Vekkot_Continuous.pdf (§38.1). TASLAK: Claude tarafından PDF metni ve sayfa görüntülerinden
+# elle hazırlandı (pipeline çıktısı kullanılmadı); kullanıcı onayı bekliyor. Sayfa numaraları PDF sayfasıdır.
+# Table 9 çok düzeyli başlıklıdır; başlık "Ölçüt Sınıf" biçiminde düzleştirildi (Precision Ambiguous …).
+source: real/2025_Vekkot_Continuous.pdf
+sha256: "68cd2afbe67ea1023d46dbacf76e59e90950dff72250524b9df099c640d23484"
+kind: real
+bibliographic:
+  title: "Continuous Speech-Based Fatigue Detection and Transition State Prediction for Air Traffic Controllers"
+  authors: ["Susmitha Vekkot", "Surya Teja Chavali", "Charan Tej Kandavalli", "Rama Sai Abhishek Podila", "Deepa Gupta",
+            "Mohammed Zakariah", "Yousef Ajami Alotaibi"]
+  year: 2025
+  venue: "IEEE Access"
+  doi: "10.1109/ACCESS.2024.3524452"
+tables:
+  - number: "1"
+    page: 7
+    caption: "TABLE 1. Statistics of the dataset."
+    header: ["Dataset", "Number of Fatigue samples", "Number of Non-Fatigue samples", "Total"]
+    rows:
+      - ["ATC1", "415", "1182", "1597"]
+      - ["ATC2", "199", "1110", "1309"]
+      - ["ATC3", "155", "1047", "1202"]
+      - ["ATC4", "164", "837", "1001"]
+      - ["ATC5", "152", "1421", "1573"]
+      - ["ATC6", "336", "1513", "1849"]
+      - ["ATC7", "245", "824", "1069"]
+      - ["Total", "1666", "7934", "9600"]
+  - number: "9"
+    page: 17
+    caption: "TABLE 9. Performance Scores of individual and combined feature model combinations on continuous speech data."
+    header: ["Feature-Model Combination", "Precision Ambiguous", "Precision Fatigue", "Precision Non-Fatigue",
+             "Recall Ambiguous", "Recall Fatigue", "Recall Non-Fatigue", "F score Ambiguous", "F score Fatigue",
+             "F score Non-Fatigue"]
+    rows:
+      - ["MFCC-GRU", "59", "91", "99", "38", "98", "98", "46", "95", "99"]
+      - ["MFCC-Bi-GRU", "82", "98", "99", "73", "97", "100", "77", "98", "99"]
+      - ["MFCC-Bi-LSTM", "94", "99", "100", "95", "99", "100", "94", "99", "100"]
+      - ["Stat-GRU", "76", "95", "99", "49", "99", "99", "60", "97", "99"]
+      - ["Stat-Bi-GRU", "64", "66", "93", "10", "79", "91", "17", "72", "92"]
+      - ["Stat-Bi-LSTM", "68", "87", "97", "64", "89", "97", "66", "88", "97"]
+      - ["MFCC+Stat-GRU", "56", "92", "98", "25", "95", "99", "35", "94", "98"]
+      - ["MFCC+Stat-Bi-GRU", "75", "94", "98", "43", "97", "99", "55", "95", "99"]
+      - ["MFCC+Stat-Bi-LSTM", "91", "99", "100", "92", "99", "100", "91", "99", "100"]
+equations:
+  - number: "1"
+    page: 6
+    latex: "z = \\frac{x - u}{s}"
+    description: "z-score normalization"
+  - number: "2"
+    page: 6
+    latex: "H(S|a) = \\Sigma S_a(v) S_v \\times H(Sa(v))"
+    description: "Conditional entropy for feature selection"
+  - number: "3"
+    page: 10
+    latex: "SPL = 20 * \\log \\frac{p}{p_{ref}}"
+    description: "Sound pressure level"
+  - number: "5"
+    page: 11
+    latex: "\\phi_{j(x)} = \\Sigma_S [v(S \\bigcup j) - v(S)] / |S|"
+    description: "Shapley value"
+results:
+  - {model: "XGBoost", metric: "accuracy", value: 1.0, page: 1, dataset: "discrete speech (ATC corpus)"}
+  - {model: "bi-LSTM (MFCC+Stat)", metric: "average accuracy", value: 0.99, page: 1, dataset: "continuous speech"}
+  - {model: "MFCC+Stat-Bi-LSTM", metric: "F score (Ambiguous)", value: 91, page: 17, table: "Table 9"}
+  - {model: "MFCC+Stat-Bi-LSTM", metric: "Recall (Ambiguous)", value: 92, page: 17, table: "Table 9"}
+  - {model: "MFCC+Stat-Bi-LSTM", metric: "F score (Fatigue)", value: 99, page: 17, table: "Table 9"}
+  - {model: "MFCC+Stat-Bi-LSTM", metric: "F score (Non-Fatigue)", value: 100, page: 17, table: "Table 9"}
+  - {model: "MFCC-Bi-LSTM", metric: "F score (Ambiguous)", value: 94, page: 17, table: "Table 9"}
+  - {model: "Stat-Bi-GRU", metric: "Recall (Ambiguous)", value: 10, page: 17, table: "Table 9"}

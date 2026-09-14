@@ -1,3 +1,3 @@
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 PARSER_VERSION = "0.3.0"
 

@@ -121,6 +121,38 @@ def test_table_value_must_be_in_model_row(table_doc):
     assert [r.verification for r in extraction.results] == ["unverified", "verified"]
 
 
+VEKKOT_LIKE_CELLS = [
+    ["Feature-Model Combination", "Precision", "", "", "Recall", "", "", "F score", "", ""],
+    ["", "Ambiguous", "Fatigue", "Non-Fatigue", "Ambiguous", "Fatigue", "Non-Fatigue", "Ambiguous", "Fatigue",
+     "Non-Fatigue"],
+    ["MFCC-Bi-LSTM", "94", "99", "100", "95", "99", "100", "94", "99", "100"],
+    ["MFCC+Stat-Bi-LSTM", "91", "99", "100", "92", "99", "100", "91", "99", "100"],
+]
+
+
+def test_table_value_must_be_in_metric_column_with_multilevel_header(table_doc):
+    document = table_doc.model_copy(deep=True)
+    table = next(t for t in document.tables if t.id == next(b.ref_id for b in document.blocks if b.id == "p1-b4"))
+    table.cells = VEKKOT_LIKE_CELLS
+    plan = make_plan()
+
+    def result(model, metric, value):
+        return {"field": "results.best", "claim": model, "model": model, "metric": metric, "value_text": value,
+                "evidence": [{"block_id": "p1-b4", "page": 1}]}
+
+    extraction = verified(document, plan, partial(results=[
+        result("MFCC+Stat-Bi-LSTM", "Ambiguous F score", "92%"),   # 92 aynı satırda ama Recall sütununda
+        result("MFCC+Stat-Bi-LSTM", "Ambiguous F score", "91%"),
+        result("MFCC+Stat-Bi-LSTM", "Fatigue F score", "99%"),
+        result("MFCC-Bi-LSTM", "Recall (Ambiguous)", "95"),
+        result("MFCC+Stat-Bi-LSTM", "precision, recall", "92"),     # sütun belirsiz → satır kuralı
+        result("Bi-LSTM", "F1-Score (Ambiguous)", "92%"),           # ad iki satıra uyar; sütunda 94 ve 91
+        result("Bi-LSTM", "F-measure Ambiguous", "91"),
+    ]))
+    assert [r.verification for r in extraction.results] == ["unverified", "verified", "verified", "verified",
+                                                            "verified", "unverified", "verified"]
+
+
 def test_invented_block_id_is_source_not_found(table_doc):
     plan = make_plan()
     extraction = verified(table_doc, plan, partial(results=[
