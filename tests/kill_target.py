@@ -12,12 +12,13 @@ sys.path.insert(0, str(ROOT))
 
 import src.atomic_io as atomic_io  # noqa: E402
 import src.cli as cli  # noqa: E402
+import src.runner as runner  # noqa: E402
 from tests.fakes import FakeBackend  # noqa: E402
 
 
 def main():
     marker, stall_at, args = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3:]
-    cli.create_model_backend = lambda config, logger: FakeBackend()
+    runner.create_model_backend = lambda config, logger: FakeBackend()
     real_replace = atomic_io._replace_with_retry
     markdown_writes = 0
 

@@ -92,6 +92,18 @@ class BatchEvents:
     def on_run_end(self, summary):
         pass
 
+    def on_checks(self, results):
+        """Başlangıç kontrolleri (§26): `CheckResult` listesi."""
+
+    def on_document_failed(self, relative_path, stage, error_type, message):
+        """Belge başarısız oldu (§28 hata kaydı); `on_document_end` ayrıca çağrılır."""
+
+    def on_document_warnings(self, relative_path, stage, warnings):
+        """Tamamlanan belgenin uyarıları (§41.2 hata/uyarı paneli)."""
+
+    def on_collection_output(self, path):
+        """Koleksiyon Markdown'ı yazıldı veya değişmediği için mevcut dosya kullanıldı (§41.3)."""
+
 
 def decide(record, plan_hash, output_file, retry_failed, force):
     """Döner: `process`, `skip` veya `not_selected`.
@@ -296,6 +308,8 @@ class BatchProcessor:
             summary.completed_with_warnings += 1
         self.logger.info("Tamamlandı [%s]: %s → %s (%.1f sn, %d uyarı)", status.value, rel, output_rel, elapsed, len(warnings))
         self._log_document_summary(rel, document, elapsed, summary, calls_before, warnings, status)
+        if warnings:
+            self.events.on_document_warnings(rel, stage.value, warnings)
         self.events.on_document_end(rel, status, warnings, output_rel)
 
     def _log_document_summary(self, rel, document, elapsed, summary, calls_before, warnings, status):
@@ -600,4 +614,5 @@ class BatchProcessor:
         self.logger.error("Başarısız [%s/%s]: %s (deneme %d) — %s", outcome.stage.value, outcome.error_type,
                           relative_path, attempt, outcome.message)
         self.write_summary()
+        self.events.on_document_failed(relative_path, outcome.stage.value, outcome.error_type, outcome.message)
         self.events.on_document_end(relative_path, DocumentStatus.failed, [], None, error=outcome.message)

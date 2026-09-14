@@ -34,17 +34,18 @@ def unique_run_id(base_run_id, output_dir, existing_run_ids=()):
         candidate = f"{base_run_id}-{counter}"
     return candidate
 
-def setup_logging(output_dir=None, level="INFO", run_id=None):
+def setup_logging(output_dir=None, level="INFO", run_id=None, console=True):
     """Konsol loglamasını kurar. `output_dir` verilirse dosya handler'ı da eklenir;
     çıktı klasörüne kilit alındıktan sonra yazılması için normalde `add_file_handler` ayrıca çağrılır."""
     logger = logging.getLogger(LOGGER_NAME)
     close_logging()
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
-    console = TqdmHandler()
-    console.setLevel(logging.WARNING)
-    console.setFormatter(logging.Formatter(_FORMAT))
-    logger.addHandler(console)
+    if console and sys.stderr is not None:  # GUI (pythonw) altında konsol akışı yoktur
+        handler = TqdmHandler()
+        handler.setLevel(logging.WARNING)
+        handler.setFormatter(logging.Formatter(_FORMAT))
+        logger.addHandler(handler)
     if output_dir is not None:
         add_file_handler(output_dir, run_id or new_run_id(), level)
     return logger

@@ -103,3 +103,12 @@ def test_ensure_under_output_blocks_traversal(tmp_path):
     assert ensure_under_output(output / "x" / "y.md", output) == (output / "x" / "y.md").resolve()
     with pytest.raises(ValueError):
         ensure_under_output(output / ".." / "escape.md", output)
+
+
+def test_extended_length_prefix_is_removed():
+    from pathlib import Path
+
+    from src.paths import _strip_extended_prefix
+    assert str(_strip_extended_prefix(Path(r"\\?\C:\Users\a\output\_cache"))) == r"C:\Users\a\output\_cache"
+    assert str(_strip_extended_prefix(Path(r"\\?\UNC\server\share\x"))) == r"\\server\share\x"
+    assert str(_strip_extended_prefix(Path(r"C:\normal"))) == r"C:\normal"

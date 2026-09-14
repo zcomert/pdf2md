@@ -121,5 +121,5 @@ def fake_model_backend(request, monkeypatch):
     from tests.fakes import FakeBackend
     backend = FakeBackend()
     if request.node.get_closest_marker("requires_ollama") is None:
-        monkeypatch.setattr("src.cli.create_model_backend", lambda config, logger: backend)
+        monkeypatch.setattr("src.runner.create_model_backend", lambda config, logger: backend)
     return backend

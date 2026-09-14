@@ -11,7 +11,19 @@ RESERVED_OUTPUT_DIRS = {"_cache", "logs", "collections"}
 
 
 def normalize(path):
-    return Path(path).expanduser().resolve()
+    """Mutlak, sembolik bağlantıları çözülmüş yol. Windows'ta `resolve()` klasör o anda başka bir süreç tarafından
+    değiştiriliyorsa (ör. paralel ayrıştırma worker'ı `_cache` oluştururken) `\\\\?\\` uzun yol önekini bırakabiliyor;
+    önek kaldırılır, aksi halde "çıktı klasörü içinde mi" karşılaştırmaları yanlış sonuç verir."""
+    return _strip_extended_prefix(Path(path).expanduser().resolve())
+
+
+def _strip_extended_prefix(path):
+    text = str(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + text[8:])
+    if text.startswith("\\\\?\\"):
+        return Path(text[4:])
+    return path
 
 
 def is_pdf_path(path):
