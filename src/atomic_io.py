@@ -14,7 +14,8 @@ def atomic_write_bytes(path, data, retries=5):
     """Geçici dosyaya yaz, diske aktar, `os.replace` ile yerine koy. Yarım dosya hedefte görünmez."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=TMP_SUFFIX, dir=path.parent)
+    # Önek kısa tutulur: Windows'ta 260 karakter yol sınırı uzun hash adlı dosyalarda aşılabiliyor.
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name[:16]}.", suffix=TMP_SUFFIX, dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)

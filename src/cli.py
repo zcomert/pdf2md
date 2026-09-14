@@ -97,6 +97,12 @@ class ConsoleEvents(BatchEvents):
             self.bar.close()
 
 
+class TextSetup:
+    def __init__(self, client, info):
+        self.client = client
+        self.info = info
+
+
 class VisionSetup:
     def __init__(self, client, info):
         self.client = client
@@ -196,9 +202,6 @@ def main(argv=None, events=None, cancel_token=None):
         if args.prompt is not None and args.prompt_file is not None:
             logger.warning("--prompt ve --prompt-file birlikte verildi; --prompt önceliklidir (§10.1).")
         prompt = resolve_prompt(args, config)
-        if not prompt.is_default and not args.plan_only:
-            raise PreflightError("Prompt tabanlı çıkarım henüz desteklenmiyor (Faz 08–09).",
-                                 "Tam Markdown dönüşümü için prompt vermeden çalıştırın")
         input_path = normalize(config.input_dir)
         output_dir = normalize(config.output_dir) if config.output_dir else default_output_dir(input_path)
         checks = run_preflight(config, input_path, output_dir)
@@ -232,7 +235,8 @@ def main(argv=None, events=None, cancel_token=None):
         run_id = unique_run_id(run_id, output_dir, state.state.runs)
         log_path = add_file_handler(output_dir, run_id, config.logging.level)
         logger.info("Çalıştırma %s başladı. Giriş: %s, çıktı: %s", run_id, input_path, output_dir)
-        prompt_label = "boş prompt, varsayılan kullanıldı" if prompt.empty_prompt else "varsayılan (tam dönüşüm)"
+        prompt_label = ("boş prompt, varsayılan kullanıldı" if prompt.empty_prompt else
+                        "varsayılan (tam dönüşüm)" if prompt.is_default else "kullanıcı promptu")
         logger.info("Prompt: %s (kaynak: %s, sha256: %s)", prompt_label, prompt.source, prompt.sha256[:12])
         logger.debug("Etkin yapılandırma: %s", config.model_dump_json())
         for result in checks:
@@ -270,7 +274,15 @@ def main(argv=None, events=None, cancel_token=None):
         except ModelUnavailable as exc:
             raise PreflightError(f"Plan oluşturulamadı: {exc}") from exc
         _log_plan(logger, plan_result, plan_hash)
+        if plan_result.plan.scope == "collection":
+            raise PreflightError("Koleksiyon kapsamı henüz desteklenmiyor (Faz 10).",
+                                 "Her PDF için ayrı cevap üretmek üzere --scope document ile çalıştırın")
         summary.plan_hash = plan_hash
+        targeted = filter_targets(result.documents, plan_result.plan, context)
+        if len(targeted) != len(result.documents):
+            logger.info("Plan hedef filtresi (%s): %d/%d PDF", ", ".join(plan_result.plan.targets.include),
+                        len(targeted), len(result.documents))
+            result.documents = targeted
         if text_client is not None:
             summary.text_llm_calls = text_client.calls
         vision = None
@@ -279,7 +291,8 @@ def main(argv=None, events=None, cancel_token=None):
                                               log_content=config.logging.log_model_content), models["vision"])
         processor = BatchProcessor(config, state, CacheManager(output_dir), output_dir, run_id, logger, prompt,
                                    force=args.force, events=events or ConsoleEvents(), cancel_token=token,
-                                   ocr_settings=ocr_settings, vision=vision, plan=plan_result.plan, plan_hash=plan_hash)
+                                   ocr_settings=ocr_settings, vision=vision, plan=plan_result.plan, plan_hash=plan_hash,
+                                   text=TextSetup(text_client, models["text"]) if text_client is not None else None)
         cancelled = False
         stopped = None
         try:

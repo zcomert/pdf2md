@@ -29,6 +29,8 @@ def default_response(schema):
         return {"columns": 2}
     if title == "ProcessingPlan":
         return dict(FAKE_PLAN)
+    if title == "LlmExtraction":
+        return {"fields": [], "results": [], "equations": [], "tables": []}
     return {}
 
 

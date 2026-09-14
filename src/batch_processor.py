@@ -10,6 +10,9 @@ from datetime import datetime
 from .atomic_io import atomic_write_text
 from .document_model import DocumentWarning
 from .errors import DocumentError, ErrorStage, FatalBatchError
+from .answer_builder import render_prompt_answer
+from .field_catalog import FULL_CONVERSION
+from .llm_extractor import extract, load_extraction, save_extraction, verify_extraction
 from .model_clients import ModelUnavailable
 from .vision_enrichment import apply_vision_results, run_vision_jobs
 from .vision_triggers import select_vision_jobs
@@ -105,7 +108,8 @@ def _non_empty(path):
 
 class BatchProcessor:
     def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
-                 events=None, cancel_token=None, now=None, ocr_settings=None, vision=None, plan=None, plan_hash=None):
+                 events=None, cancel_token=None, now=None, ocr_settings=None, vision=None, plan=None, plan_hash=None,
+                 text=None):
         self.config = config
         self.state = state
         self.cache = cache
@@ -121,6 +125,7 @@ class BatchProcessor:
         self.ocr_settings = ocr_settings
         self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
         self.plan = plan or default_plan()
+        self.text = text  # TextSetup (istemci + model bilgisi); varsayılan plan metin modelini kullanmaz
         self.plan_hash = plan_hash or compute_plan_hash(self.plan, prompt.sha256, config.mode,
                                                         vision_model=vision.info if vision else None)
 
@@ -170,29 +175,19 @@ class BatchProcessor:
             document, vision_warnings, vision_model = self._enrich_with_vision(pdf, record, document, summary)
             self.cancel_token.checkpoint()
 
-            self.events.on_stage(rel, "assets")
-            doc_cache_dir = self.cache.doc_dir(record.sha256)
-            assets = materialize_assets(pdf.absolute_path, document, doc_cache_dir, self.config.pdf.render_dpi,
-                                        self.config.pdf.crop_padding_pt, overwrite=self.force)
-            for item_id, page_number, error in assets.failed:
-                self.logger.warning("Görsel çıkarılamadı [%s, s.%d]: %s — %s", item_id, page_number, rel, error)
-            self.cancel_token.checkpoint()
-
-            stage = ErrorStage.write
-            self.events.on_stage(rel, "write")
-            warnings = [str(w) for w in document.warnings] + vision_warnings + list(self.prompt.run_warnings)
-            warnings += sorted({f"asset_extraction_failed: page {page_number}" for _, page_number, _ in assets.failed})
-            warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
-                         if f"unreadable_page: page {n}" not in warnings]
-            status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
-            models = {"vision": vision_model.reference} if vision_model else {}
-            markdown, referenced = render_full_conversion(document, self._context(rel, record.sha256, status,
-                                                                                   frozenset(assets.available), models))
-            target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
-            self.cancel_token.checkpoint()
-            # Görseller Markdown'dan önce yazılır: Markdown hiçbir zaman olmayan bir görsele referans vermez.
-            sync_assets(target.parent, doc_cache_dir, referenced)
-            atomic_write_text(target, markdown)
+            base_warnings = [str(w) for w in document.warnings] + vision_warnings + list(self.prompt.run_warnings)
+            models = {"vision": vision_model} if vision_model else {}
+            if FULL_CONVERSION in self.plan.requested_fields:
+                stage = ErrorStage.write
+                status, warnings = self._write_full_conversion(pdf, record, document, base_warnings, models, output_rel)
+            else:
+                stage = ErrorStage.llm
+                status, warnings = self._write_prompt_answer(pdf, record, document, base_warnings, models, output_rel,
+                                                             summary)
+        except ModelUnavailable as exc:
+            # §28: metin modeli servisi kapandı; belge sonraki çalıştırmada işlenir, batch durur.
+            self.state.update(rel, status=DocumentStatus.pending)
+            raise FatalBatchError(ErrorStage.llm, str(exc)) from exc
         except (Cancelled, FatalBatchError):
             # Belgenin kendisinde sorun yok (iptal veya model servisi kapandı): sonraki çalıştırmada işlenir.
             self.state.update(rel, status=DocumentStatus.pending)
@@ -214,13 +209,88 @@ class BatchProcessor:
         self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
                           prompt_sha256=self.prompt.sha256, plan_hash=self.plan_hash, processed_at=self._now(), processing_time_sec=elapsed,
                           error_stage=None, error=None, history=history,
-                          models={"vision": ModelRef(name=vision_model.name, digest=vision_model.digest)} if vision_model else {})
+                          models={role: ModelRef(name=info.name, digest=info.digest) for role, info in models.items()})
         if status == DocumentStatus.completed:
             summary.completed += 1
         else:
             summary.completed_with_warnings += 1
         self.logger.info("Tamamlandı [%s]: %s → %s (%.1f sn, %d uyarı)", status.value, rel, output_rel, elapsed, len(warnings))
         self.events.on_document_end(rel, status, warnings, output_rel)
+
+    def _write_full_conversion(self, pdf, record, document, warnings, models, output_rel):
+        """Varsayılan plan: deterministik tam dönüşüm (§16.3), metin LLM'i çağrılmaz. Döner: (durum, uyarılar)."""
+        rel = pdf.relative_path
+        self.events.on_stage(rel, "assets")
+        doc_cache_dir = self.cache.doc_dir(record.sha256)
+        assets = materialize_assets(pdf.absolute_path, document, doc_cache_dir, self.config.pdf.render_dpi,
+                                    self.config.pdf.crop_padding_pt, overwrite=self.force)
+        for item_id, page_number, error in assets.failed:
+            self.logger.warning("Görsel çıkarılamadı [%s, s.%d]: %s — %s", item_id, page_number, rel, error)
+        self.cancel_token.checkpoint()
+
+        self.events.on_stage(rel, "write")
+        warnings = list(warnings)
+        warnings += sorted({f"asset_extraction_failed: page {page_number}" for _, page_number, _ in assets.failed})
+        warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
+                     if f"unreadable_page: page {n}" not in warnings]
+        status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+        markdown, referenced = render_full_conversion(document, self._context(
+            rel, record.sha256, status, frozenset(assets.available), {k: v.reference for k, v in models.items()}))
+        target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
+        self.cancel_token.checkpoint()
+        # Görseller Markdown'dan önce yazılır: Markdown hiçbir zaman olmayan bir görsele referans vermez.
+        sync_assets(target.parent, doc_cache_dir, referenced)
+        atomic_write_text(target, markdown)
+        return status, warnings
+
+    def _write_prompt_answer(self, pdf, record, document, warnings, models, output_rel, summary):
+        """Prompt cevabı (§21.4 belge kapsamı): çıkarım (önbellek) → doğrulama → A.md. `models` sözlüğüne metin
+        modeli eklenir. Döner: (durum, uyarılar)."""
+        rel = pdf.relative_path
+        if self.text is None:
+            raise DocumentError(ErrorStage.llm, "Metin modeli kullanılamıyor")
+        path = self.cache.extraction_path(record.sha256, self.plan_hash)
+        extraction = None if self.force else load_extraction(path, record.sha256, self.plan_hash)
+        if extraction is None:
+            self.events.on_stage(rel, "llm")
+            config = self.config
+            extraction = extract(document, self.plan, self.plan_hash, self.text.client, config.ollama.max_retries,
+                                 config.models.text_num_ctx, config.models.max_output_tokens,
+                                 errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger,
+                                 checkpoint=self.cancel_token.checkpoint)
+            summary.text_llm_calls += extraction.llm_calls
+            self.cancel_token.checkpoint()
+            self.events.on_stage(rel, "validation")
+            extraction = verify_extraction(extraction, document)
+            save_extraction(path, extraction)
+            origin = f"{extraction.chunks} parça, {extraction.llm_calls} çağrı"
+        else:
+            origin = "önbellekten"
+        found = sum(1 for item in extraction.fields.values() if item.status == "found")
+        self.logger.info("Çıkarım: %s — %s; %d/%d alan bulundu, %d sonuç, %d uyarı", rel, origin, found,
+                         len(extraction.fields), len(extraction.results), len(extraction.warnings))
+        self.cancel_token.checkpoint()
+
+        self.events.on_stage(rel, "write")
+        models["text"] = self.text.info
+        references = {role: info.reference for role, info in models.items()}
+        warnings = list(warnings) + [w for w in extraction.warnings if w not in warnings]
+        warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
+                     if f"unreadable_page: page {n}" not in warnings]
+        style = self.config.output.citation_style
+        # Güvenlik ağı uyarıları durumu değiştirebilir; durum front matter'da olduğu için gerekirse ikinci kez yazılır.
+        answer = render_prompt_answer(document, self.plan, extraction,
+                                      self._context(rel, record.sha256, DocumentStatus.completed, models=references), style)
+        warnings += [w for w in answer.warnings if w not in warnings]
+        status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+        if status != DocumentStatus.completed:
+            answer = render_prompt_answer(document, self.plan, extraction,
+                                          self._context(rel, record.sha256, status, models=references), style)
+        target = ensure_under_output(self.output_dir / output_rel, self.output_dir)
+        self.cancel_token.checkpoint()
+        sync_assets(target.parent, self.cache.doc_dir(record.sha256), [])  # önceki tam dönüşümün görselleri kaldırılır
+        atomic_write_text(target, answer.markdown)
+        return status, warnings
 
     def _load_or_parse(self, pdf, record, summary):
         signature = self.ocr_settings.signature if self.ocr_settings else None

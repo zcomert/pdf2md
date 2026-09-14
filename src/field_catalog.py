@@ -69,6 +69,17 @@ CATALOG = (
 )
 
 FIELDS = {spec.key: spec for spec in CATALOG}
+
+# Çıktı başlıklarını alanlarla eşlemek için grup adları (TR/EN)
+GROUP_LABELS = {
+    "bibliographic": ("Künye", "Kaynak bilgisi", "Bibliographic", "Bibliography", "Metadata"),
+    "research": ("Araştırma", "Research", "Study"),
+    "dataset": ("Veri seti", "Veri", "Dataset", "Data"),
+    "methodology": ("Yöntem", "Metodoloji", "Method", "Methodology", "Approach"),
+    "results": ("Sonuçlar", "Bulgular", "Results", "Findings", "Performance"),
+    "equations": ("Formüller", "Denklemler", "Equations", "Formulas"),
+    "evaluation": ("Değerlendirme", "Evaluation", "Discussion"),
+}
 # Grup öneki olmadan verilen adlar ("title", "doi") tek bir alana karşılık geliyorsa kabul edilir.
 _BY_NAME = {}
 for _spec in CATALOG:

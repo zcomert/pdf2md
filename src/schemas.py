@@ -149,6 +149,95 @@ class ProcessingPlan(StrictModel):
         return self
 
 
+EXTRACTION_SCHEMA_VERSION = "1.0"
+FieldStatus = Literal["found", "not_found", "unclear"]
+Verification = Literal["verified", "unverified", "source_not_found"]
+Confidence = Literal["high", "medium", "low"]
+
+
+class Evidence(StrictModel):
+    """Model yalnızca `block_id` ve `page` verir; diğer alanlar belgeden deterministik doldurulur."""
+    page: int | None = None
+    block_id: str | None = None
+    section: str | None = None
+    table: str | None = Field(None, description="Tablo etiketi, ör. 'Table 9'")
+    figure: str | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    source_method: Literal["text", "ocr", "vision"] | None = None
+    resolved: bool = Field(False, description="Kanıt belgede bulundu (block_id/sayfa gerçek)")
+
+
+def _empty_value(value):
+    return value is None or value == []
+
+
+class FieldValue(StrictModel):
+    value: str | int | float | list[str] | None = None
+    value_text: str | None = None
+    status: FieldStatus
+    evidence: list[Evidence] = []
+    verification: Verification | None = Field(None, description="Yalnızca sayı içeren değerler için")
+    confidence: Confidence | None = None
+    in_evidence: bool | None = Field(None, description="Sayısal olmayan değerin metni kanıtta geçiyor mu")
+
+    @model_validator(mode="after")
+    def check_status(self):
+        if self.status == "not_found" and not _empty_value(self.value):
+            raise ValueError("not_found value must be null or []")
+        if isinstance(self.value, str) and not self.value.strip():
+            raise ValueError("empty string is not allowed; use status not_found with null")
+        return self
+
+
+class ResultItem(StrictModel):
+    field: str = Field(description="Sonucun ait olduğu plan alanı, ör. results.best")
+    claim: str
+    model: str | None = None
+    metric: str | None = None
+    value: float | None = None
+    value_text: str | None = None
+    dataset: str | None = None
+    evidence: list[Evidence] = []
+    verification: Verification = "source_not_found"
+    confidence: Confidence = "low"
+
+
+class EquationSelection(StrictModel):
+    equation_id: str
+    description: str | None = None
+    evidence: list[Evidence] = []
+
+
+class ConflictValue(StrictModel):
+    value: str | int | float | list[str] | None
+    evidence: list[Evidence] = []
+
+
+class Conflict(StrictModel):
+    field: str
+    values: list[ConflictValue]
+
+
+class ExtractionSource(StrictModel):
+    path: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class Extraction(StrictModel):
+    """`_cache/<sha>/extractions/<plan_hash>.json` (§18). Kullanıcıya teslim edilmez."""
+    schema_version: str = EXTRACTION_SCHEMA_VERSION
+    source: ExtractionSource
+    plan_hash: str
+    fields: dict[str, FieldValue] = {}
+    results: list[ResultItem] = []
+    equations_selected: list[EquationSelection] = []
+    tables_selected: list[str] = []
+    conflicts: list[Conflict] = []
+    warnings: list[str] = []
+    chunks: int = 0
+    llm_calls: int = 0
+
+
 class ProcessingState(StrictModel):
     schema_version: str = STATE_SCHEMA_VERSION
     documents: dict[str, DocumentState] = {}

@@ -95,12 +95,6 @@ def test_empty_prompt_completes_with_warnings(tmp_input_copy, tmp_output):
     assert any(w.startswith("empty_prompt") for w in record["warnings"])
 
 
-def test_custom_prompt_not_supported_yet(tmp_input_copy, tmp_output, capsys):
-    assert run(tmp_input_copy, tmp_output, "--prompt", "Veri setlerini çıkar") == EXIT_PREFLIGHT
-    assert "henüz desteklenmiyor" in capsys.readouterr().err
-    assert not tmp_output.exists()
-
-
 def test_force_regenerates_everything(tmp_input_copy, tmp_output, capsys):
     args = ("--include", "synthetic_s*.pdf")
     run(tmp_input_copy, tmp_output, *args)

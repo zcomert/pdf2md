@@ -23,6 +23,7 @@ class StructuredOutcome:
     error: str | None = None
     calls: int = 0
     raw_content: str | None = None
+    error_kind: str | None = None  # timeout | model_not_found | invalid
 
 
 class TextClient:
@@ -36,24 +37,27 @@ class TextClient:
         self.calls = 0  # çalıştırma boyunca metin LLM çağrısı sayısı (RunSummary.text_llm_calls)
 
     def generate_structured(self, system, user, schema_model, task, max_retries, errors_dir=None, prepare=None,
-                            max_output_tokens=None):
+                            max_output_tokens=None, schema=None):
         """`schema_model` ile doğrulanmış sonuç üretir. `prepare(dict) -> dict` doğrulamadan önce deterministik
         düzeltme uygular (ör. alan adı eşleme). `ModelUnavailable` yayılır; zaman aşımı ve model yokluğu
-        `StructuredOutcome.error` ile döner."""
+        `StructuredOutcome.error` ile döner. `schema`: modele verilecek JSON şeması (varsayılan: `schema_model`
+        şeması; ör. alan anahtarlarını enum ile daraltmak için)."""
+        schema = schema or schema_model.model_json_schema()
         num_predict = min(max_output_tokens, self.max_output_tokens) if max_output_tokens else self.max_output_tokens
         feedback = ""
         content = None
         calls = 0
         for attempt in range(1, max_retries + 2):
             try:
-                response = self.backend.chat(self.model, user + feedback, schema=schema_model.model_json_schema(),
+                response = self.backend.chat(self.model, user + feedback, schema=schema,
                                              options={"temperature": 0, "num_ctx": self.num_ctx,
                                                       "num_predict": num_predict},
                                              system=system)
             except (ModelTimeout, ModelNotFound) as exc:
                 self.logger.warning("Metin modeli çağrısı başarısız: model=%s görev=%s deneme=%d — %s",
                                     self.model, task, attempt, exc)
-                return StructuredOutcome(None, error=str(exc), calls=calls)
+                kind = "timeout" if isinstance(exc, ModelTimeout) else "model_not_found"
+                return StructuredOutcome(None, error=str(exc), calls=calls, error_kind=kind)
             calls += 1
             self.calls += 1
             content = response.content
@@ -79,7 +83,7 @@ class TextClient:
                 self.logger.debug("Metin modeli yanıtı (%s): %s", task, content)
             return StructuredOutcome(parsed, calls=calls, raw_content=content)
         return StructuredOutcome(None, error=f"{max_retries + 1} denemede geçerli yanıt alınamadı", calls=calls,
-                                 raw_content=content)
+                                 raw_content=content, error_kind="invalid")
 
 
 def short_error(exc):

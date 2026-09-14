@@ -43,7 +43,8 @@ class CacheManager:
     def extraction_path(self, sha256, plan_hash):
         if not PLAN_HASH_RE.match(plan_hash or ""):
             raise ValueError(f"Geçersiz plan hash: {plan_hash!r}")
-        return self.doc_dir(sha256) / "extractions" / f"{plan_hash}.json"
+        # Dosya adında hash'in ilk 32 karakteri (128 bit): Windows yol sınırı. Tam hash dosyanın içinde doğrulanır.
+        return self.doc_dir(sha256) / "extractions" / f"{plan_hash[:32]}.json"
 
     def load_document(self, sha256, parse_config_hash, force=False, ocr_signature=None):
         """Geçerli önbellek kaydı veya None. Dosya yok, JSON bozuk, şema/ayrıştırıcı sürümü ya da
