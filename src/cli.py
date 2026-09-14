@@ -11,7 +11,7 @@ from .batch_processor import BatchEvents, BatchProcessor, Cancelled, CancelToken
 from .cache_manager import CacheManager
 from .config import load_config, merge_cli
 from .default_prompt import resolve_prompt
-from .errors import FatalBatchError, PreflightError
+from .errors import DocumentError, ErrorStage, FatalBatchError, PreflightError
 from .logger import add_file_handler, new_run_id, setup_logging, unique_run_id
 from .paths import default_output_dir, normalize
 from .pdf_discovery import discover, sync_with_state
@@ -20,7 +20,8 @@ from .model_clients import ModelUnavailable
 from .ollama_backend import OllamaBackend
 from .prompt_planner import (PlanContext, compute_plan_hash, create_plan, describe_plan, filter_targets,
                              summary_signature)
-from .preflight import check_gpu, check_models, check_ocr, check_xlsx, raise_on_errors, run_preflight
+from .preflight import (check_collection_output, check_gpu, check_models, check_ocr, check_xlsx, raise_on_errors,
+                        run_preflight)
 from .vision_client import VisionClient
 from .schemas import RunSummary
 from .state_manager import OutputLock, StateManager
@@ -218,9 +219,9 @@ def main(argv=None, events=None, cancel_token=None):
         model_checks, models = check_models(config, backend)
         checks.extend(model_checks)
         checks.append(check_gpu())
-        xlsx_check = check_xlsx(config)
-        if xlsx_check is not None:
-            checks.append(xlsx_check)
+        for optional_check in (check_xlsx(config), check_collection_output(args.collection_output, input_path)):
+            if optional_check is not None:
+                checks.append(optional_check)
         _log_checks(logger, checks)
         raise_on_errors(checks)
     except PreflightError as exc:
@@ -285,9 +286,9 @@ def main(argv=None, events=None, cancel_token=None):
         except ModelUnavailable as exc:
             raise PreflightError(f"Plan oluşturulamadı: {exc}") from exc
         _log_plan(logger, plan_result, plan_hash)
-        if plan_result.plan.scope == "collection":
-            raise PreflightError("Koleksiyon kapsamı henüz desteklenmiyor (Faz 12).",
-                                 "Her PDF için ayrı cevap üretmek üzere --scope document ile çalıştırın")
+        if plan_result.plan.scope == "collection" and prompt.is_default:
+            raise PreflightError("Koleksiyon kapsamı bir prompt gerektirir (varsayılan prompt tam dönüşümdür).",
+                                 "--prompt ile karşılaştırma isteğini verin veya --scope document kullanın")
         summary.plan_hash = plan_hash
         targeted = filter_targets(result.documents, plan_result.plan, context)
         if len(targeted) != len(result.documents):
@@ -315,6 +316,24 @@ def main(argv=None, events=None, cancel_token=None):
             # §28: sistem geneli hata (model servisi kapandı); durum kaydedildi, yeniden çalıştırınca devam edilir.
             stopped = exc
             logger.error("Batch durduruldu [%s]: %s", exc.stage.value, exc.message)
+        collection_error = None
+        collection_path = None
+        if processor.collection and not cancelled and stopped is None:
+            try:
+                collection_path, unchanged = processor.synthesize_collection(
+                    result, summary, name=args.collection_name, output_path=args.collection_output,
+                    prompt_text=prompt.text)
+                if collection_path is None:
+                    collection_error = "başarıyla çıkarılmış belge yok"
+            except ModelUnavailable as exc:
+                stopped = FatalBatchError(ErrorStage.llm, str(exc), "model_unavailable")
+                logger.error("Batch durduruldu [llm]: %s", exc)
+            except DocumentError as exc:
+                collection_error = exc.message
+            except OSError as exc:
+                collection_error = f"Koleksiyon yazılamadı: {exc}"
+            if collection_error:
+                logger.error("Koleksiyon çıktısı üretilemedi: %s", collection_error)
         summary.failed += summary.discovery_failed
         summary.finished_at = datetime.now().isoformat(timespec="seconds")
         state.record_run(summary)
@@ -325,13 +344,18 @@ def main(argv=None, events=None, cancel_token=None):
         if stopped is not None:
             print(f"Batch durduruldu: {stopped.message}. Sorunu giderip yeniden çalıştırınca kaldığı yerden devam edilir.",
                   file=sys.stderr)
+        if collection_path is not None:
+            note = " (değişmedi, sentez atlandı)" if unchanged else ""
+            print(f"Koleksiyon: {collection_path}{note}")
+        if collection_error:
+            print(f"Koleksiyon çıktısı üretilemedi: {collection_error}", file=sys.stderr)
         print(f"Çıktı: {output_dir}")
         print(f"Log: {log_path}")
         if cancelled:
             return EXIT_CANCELLED
         if stopped is not None:
             return EXIT_DOC_FAILED
-        return EXIT_DOC_FAILED if summary.failed else EXIT_OK
+        return EXIT_DOC_FAILED if summary.failed or collection_error else EXIT_OK
     except PreflightError as exc:
         logger.error(str(exc))
         _print_error(exc)

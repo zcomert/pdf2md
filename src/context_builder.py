@@ -171,6 +171,44 @@ def select_items(document, plan, items):
     return chosen
 
 
+def split_chunk(chunk):
+    """Parçayı blok sınırında iki yarıya böler (sayfa işaretleri korunur). Tek satırlık parça bölünemez → None."""
+    lines = chunk.text.split("\n")
+    blocks, current = [], []
+    for line in lines:
+        starts_block = line.startswith("[p") or line.startswith("<!-- page:")
+        if starts_block and current and not current[-1].startswith("<!-- page:"):
+            blocks.append(current)
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(current)
+    if len(blocks) < 2:
+        return None
+    middle = len(blocks) // 2
+    halves = []
+    for part in (blocks[:middle], blocks[middle:]):
+        text_lines = [line for block in part for line in block]
+        if not text_lines[0].startswith("<!-- page:"):
+            page = _last_page_marker(lines, text_lines[0])
+            if page:
+                text_lines.insert(0, page)
+        text = "\n".join(text_lines)
+        halves.append(Chunk(text, sorted({int(m) for m in re.findall(r"<!-- page: (\d+) -->", text)}),
+                            set(re.findall(r"^\[(p\d+-b\d+)\]", text, flags=re.MULTILINE))))
+    return halves
+
+
+def _last_page_marker(lines, first_line):
+    marker = None
+    for line in lines:
+        if line.startswith("<!-- page:"):
+            marker = line
+        if line == first_line:
+            return marker
+    return marker
+
+
 def split_items(items, budget):
     chunks, current = [], []
     for item in items:

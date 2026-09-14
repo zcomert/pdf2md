@@ -3,14 +3,17 @@
 GUI (Faz 13) aynı çekirdeği kullanabilsin diye ilerleme `BatchEvents` ile bildirilir, iptal ve duraklatma
 `CancelToken` ile işbirlikçi olarak yapılır: belge ve aşama sınırlarında kontrol edilir.
 """
+import hashlib
 import shutil
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from . import PARSER_VERSION
 from .answer_builder import render_prompt_answer
 from .bibliographic import extract_bibliographic
+from .collection_analyzer import PaperEntry, render_collection, synthesize
 from .assets import sync_assets
 from .atomic_io import atomic_write_text
 from .document_model import DOCUMENT_SCHEMA_VERSION, DocumentWarning
@@ -22,15 +25,16 @@ from .llm_extractor import extract, load_extraction, save_extraction, verify_ext
 from .markdown_builder import RenderContext, render_full_conversion, unreadable_pages
 from .model_clients import ModelUnavailable
 from .parse_pool import ParsePool, cache_header_matches
-from .paths import ensure_under_output, resolve_output_paths
+from .paths import collection_safe_name, ensure_under_output, is_within, resolve_output_paths, unique_path
 from .pdf_parser import parse_config_hash, parse_pdf
 from .prompt_planner import compute_plan_hash, default_plan, summary_signature
-from .schemas import DocumentStatus, HistoryEntry, ModelRef
+from .schemas import CollectionState, DocumentStatus, HistoryEntry, ModelRef
 from .summary_writer import analytic_values, summary_plan, write_summary
 from .vision_enrichment import apply_vision_results, run_vision_jobs
 from .vision_triggers import select_vision_jobs
 
 COMPLETED_STATUSES = {DocumentStatus.completed, DocumentStatus.completed_with_warnings}
+COLLECTIONS_DIR = "collections"
 PREFETCH_PER_WORKER = 2  # CPU havuzu önündeki belge tamponu: cpu_workers × 2 (§27)
 
 
@@ -136,6 +140,8 @@ class BatchProcessor:
         self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
         self.plan = plan or default_plan()
         self.text = text  # TextSetup (istemci + model bilgisi); varsayılan plan metin modelini kullanmaz
+        # Koleksiyon kapsamı (§21.4): belge başına A.md yazılmaz, yalnızca doğrulanmış çıkarım üretilir.
+        self.collection = self.plan.scope == "collection" and FULL_CONVERSION not in self.plan.requested_fields
         hash_args = dict(vision_model=vision.info if vision else None, text_model=text.info if text else None,
                          uses_text_model=FULL_CONVERSION not in self.plan.requested_fields)
         # `plan_hash`: atlama kuralı (envanter ayarları dahil); `content_hash`: prompt çıkarımı önbellek anahtarı.
@@ -155,6 +161,10 @@ class BatchProcessor:
         decisions = []
         for pdf, record in documents:
             output_file = self.output_dir / record.output_path if record.output_path else None
+            if self.collection:
+                # Koleksiyonda belge çıktısı yoktur: atlama kuralındaki "çıktı dosyası mevcut" koşulu çıkarım dosyası
+                # için uygulanır (Faz 12 kararı).
+                output_file = self.cache.extraction_path(record.sha256, self.content_hash)
             decisions.append((pdf, record, decide(record, self.plan_hash, output_file,
                                                   self.config.processing.retry_failed, self.force)))
         to_process = [(pdf, record) for pdf, record, decision in decisions if decision == "process"]
@@ -234,7 +244,12 @@ class BatchProcessor:
             base_warnings = [str(w) for w in document.warnings] + vision_warnings + list(self.prompt.run_warnings)
             models = {"vision": vision_model} if vision_model else {}
             extraction = None
-            if FULL_CONVERSION in self.plan.requested_fields:
+            if self.collection:
+                stage = ErrorStage.llm
+                status, warnings, extraction = self._extract_for_collection(pdf, record, document, base_warnings,
+                                                                            models, summary)
+                output_rel = record.output_path  # önceki belge çıktısı (varsa) korunur; koleksiyon onu silmez
+            elif FULL_CONVERSION in self.plan.requested_fields:
                 stage = ErrorStage.write
                 status, warnings = self._write_full_conversion(pdf, record, document, base_warnings, models, output_rel)
             else:
@@ -330,27 +345,7 @@ class BatchProcessor:
         rel = pdf.relative_path
         if self.text is None:
             raise DocumentError(ErrorStage.llm, "Metin modeli kullanılamıyor")
-        path = self.cache.extraction_path(record.sha256, self.content_hash)
-        extraction = None if self.force else load_extraction(path, record.sha256, self.content_hash)
-        if extraction is None:
-            self.events.on_stage(rel, "llm")
-            config = self.config
-            extraction = extract(document, self.plan, self.content_hash, self.text.client, config.ollama.max_retries,
-                                 config.models.text_num_ctx, config.models.max_output_tokens,
-                                 errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger,
-                                 checkpoint=self.cancel_token.checkpoint)
-            summary.text_llm_calls += extraction.llm_calls
-            self.cancel_token.checkpoint()
-            self.events.on_stage(rel, "validation")
-            extraction = verify_extraction(extraction, document)
-            save_extraction(path, extraction)
-            origin = f"{extraction.chunks} parça, {extraction.llm_calls} çağrı"
-        else:
-            origin = "önbellekten"
-        found = sum(1 for item in extraction.fields.values() if item.status == "found")
-        self.logger.info("Çıkarım: %s — %s; %d/%d alan bulundu, %d sonuç, %d uyarı", rel, origin, found,
-                         len(extraction.fields), len(extraction.results), len(extraction.warnings))
-        self.cancel_token.checkpoint()
+        extraction = self._extraction(pdf, record, document, summary)
 
         self.events.on_stage(rel, "write")
         models["text"] = self.text.info
@@ -372,6 +367,113 @@ class BatchProcessor:
         sync_assets(target.parent, self.cache.doc_dir(record.sha256), [])  # önceki tam dönüşümün görselleri kaldırılır
         atomic_write_text(target, answer.markdown)
         return status, warnings, extraction
+
+    def _extraction(self, pdf, record, document, summary):
+        """Plan çıkarımı (önbellek) → doğrulama. Anahtar içerik hash'idir (envanter ayarlarından bağımsız)."""
+        rel = pdf.relative_path
+        if self.text is None:
+            raise DocumentError(ErrorStage.llm, "Metin modeli kullanılamıyor")
+        path = self.cache.extraction_path(record.sha256, self.content_hash)
+        extraction = None if self.force else load_extraction(path, record.sha256, self.content_hash)
+        if extraction is None:
+            self.events.on_stage(rel, "llm")
+            config = self.config
+            extraction = extract(document, self.plan, self.content_hash, self.text.client, config.ollama.max_retries,
+                                 config.models.text_num_ctx, config.models.max_output_tokens,
+                                 errors_dir=self.cache.errors_dir(record.sha256), logger=self.logger,
+                                 checkpoint=self.cancel_token.checkpoint)
+            summary.text_llm_calls += extraction.llm_calls
+            self.cancel_token.checkpoint()
+            self.events.on_stage(rel, "validation")
+            extraction = verify_extraction(extraction, document)
+            save_extraction(path, extraction)
+            origin = f"{extraction.chunks} parça, {extraction.llm_calls} çağrı"
+        else:
+            origin = "önbellekten"
+        found = sum(1 for item in extraction.fields.values() if item.status == "found")
+        self.logger.info("Çıkarım: %s — %s; %d/%d alan bulundu, %d sonuç, %d uyarı", rel, origin, found,
+                         len(extraction.fields), len(extraction.results), len(extraction.warnings))
+        self.cancel_token.checkpoint()
+        return extraction
+
+    def _extract_for_collection(self, pdf, record, document, warnings, models, summary):
+        """Koleksiyon kapsamında belge aşaması: yalnızca doğrulanmış çıkarım (§21.4.3). Döner: (durum, uyarılar, çıkarım)."""
+        extraction = self._extraction(pdf, record, document, summary)
+        models["text"] = self.text.info
+        warnings = list(warnings) + [w for w in extraction.warnings if w not in warnings]
+        warnings += [f"unreadable_page: page {n}" for n in unreadable_pages(document)
+                     if f"unreadable_page: page {n}" not in warnings]
+        status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+        return status, warnings, extraction
+
+    def synthesize_collection(self, discovery, summary, name=None, output_path=None, prompt_text=""):
+        """§21.4.4–21.6: doğrulanmış çıkarımları sentezleyip koleksiyon Markdown'ını yazar. Döner: (yol, atlandı_mı)
+        veya başarılı belge yoksa (None, False). Sentez başarısızsa `DocumentError`, servis kapalıysa `ModelUnavailable`."""
+        entries, failed = [], []
+        for pdf in sorted(discovery.documents, key=lambda item: item.relative_path):
+            record = self.state.get(pdf.relative_path)
+            extraction = None
+            if record is not None and record.sha256 and record.status in COMPLETED_STATUSES \
+                    and record.plan_hash == self.plan_hash:
+                extraction = load_extraction(self.cache.extraction_path(record.sha256, self.content_hash),
+                                             record.sha256, self.content_hash)
+            if extraction is None:
+                stage = record.error_stage.value if record is not None and record.error_stage else None
+                error = (record.error if record is not None and record.error else
+                         (record.status.value if record is not None else "state kaydı yok"))
+                failed.append((pdf.relative_path, stage, error))
+                continue
+            entries.append(PaperEntry(f"P{len(entries) + 1}", pdf.relative_path, record.sha256, extraction,
+                                      record.bibliographic))
+        if not entries:
+            self.logger.error("Koleksiyon sentezi yapılamadı: başarıyla çıkarılmış belge yok (%d işlenemeyen)", len(failed))
+            return None, False
+
+        hashes = sorted(entry.sha256 for entry in entries)
+        key = hashlib.sha256((self.plan_hash + "," + ",".join(hashes)).encode("ascii")).hexdigest()
+        existing = self.state.state.collections.get(key)
+        if existing is not None and existing.output_path and not self.force:
+            previous = Path(existing.output_path)
+            previous = previous if previous.is_absolute() else self.output_dir / previous
+            if previous.is_file():
+                self.logger.info("Koleksiyon değişmedi, sentez atlandı: %s", previous)
+                summary.collection_output = str(previous)
+                return previous, True
+
+        self.events.on_stage("collection", "synthesis")
+        config = self.config
+        synthesis = synthesize(entries, self.plan, prompt_text, self.text.client, config.ollama.max_retries,
+                               config.models.text_num_ctx, config.models.max_output_tokens,
+                               errors_dir=self.cache.root / "collections" / "errors", logger=self.logger)
+        summary.text_llm_calls += synthesis.llm_calls
+        models = {"text": self.text.info}
+        if self.vision is not None:
+            models["vision"] = self.vision.info
+        warnings = synthesis.warnings + [f"document_not_processed: {path}" for path, _, _ in failed]
+        status = DocumentStatus.completed_with_warnings if warnings else DocumentStatus.completed
+        created = datetime.now()
+        safe_name = collection_safe_name(name or self.plan.collection_name_suggestion)
+        if output_path is not None:
+            target = Path(output_path)
+        else:
+            target = unique_path(self.output_dir / COLLECTIONS_DIR / f"{safe_name}_{created:%Y%m%d-%H%M%S}.md")
+        context = {"name": safe_name, "generated": created.isoformat(timespec="seconds"), "mode": config.mode,
+                   "prompt_text": prompt_text, "prompt_sha256": self.prompt.sha256, "status": status.value,
+                   "models": {role: info.reference for role, info in models.items()}}
+        markdown = render_collection(entries, failed, self.plan, synthesis, context, config.output.citation_style)
+        atomic_write_text(target, markdown)
+        stored = target.relative_to(self.output_dir).as_posix() if is_within(target, self.output_dir) else str(target)
+        self.state.state.collections[key] = CollectionState(
+            document_hashes=hashes, documents=[entry.relative_path for entry in entries],
+            prompt_sha256=self.prompt.sha256, plan_hash=self.plan_hash,
+            models={role: ModelRef(name=info.name, digest=info.digest) for role, info in models.items()},
+            output_path=stored, created_at=created.isoformat(timespec="seconds"), status=status.value,
+            failed_documents=[path for path, _, _ in failed], warnings=warnings)
+        self.state.save()
+        summary.collection_output = str(target)
+        self.logger.info("Koleksiyon yazıldı [%s]: %s (%d makale, %d işlenemeyen)", status.value, target, len(entries),
+                         len(failed))
+        return target, False
 
     def _inventory(self, pdf, record, document, extraction, summary):
         """Envanter (§22.3–22.4): künye ve analitik sütunlar. `A.md` içeriğinin parçası değildir; uyarıları belge

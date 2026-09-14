@@ -419,12 +419,6 @@ def test_text_model_unavailable_stops_batch(tmp_input_copy, tmp_output, no_ocr_c
     assert record["status"] == "pending"
 
 
-def test_collection_scope_not_supported_yet(tmp_input_copy, tmp_output, no_ocr_config, capsys):
-    code = main([str(tmp_input_copy), "--output", str(tmp_output), "--config", str(no_ocr_config),
-                 "--prompt", "Veri setlerini karşılaştır."])
-    assert code == EXIT_PREFLIGHT and "Koleksiyon kapsamı" in capsys.readouterr().err
-
-
 def test_context_marks_copied_into_values_are_removed(table_doc):
     backend = FakeBackend()
     backend.responses["LlmExtraction"] = [{"fields": {
@@ -461,3 +455,77 @@ def test_real_text_model_extracts_verified_best_result(table_doc, tmp_path):
     assert all(r.verification == "verified" for r in extraction.results), extraction.results
     models = extraction.fields["methodology.models"].value
     assert {"Bi-LSTM", "SVM"} <= set(models), models
+
+
+def test_truncated_response_splits_chunk_instead_of_retrying(table_doc):
+    from src.model_clients import ModelResponse
+
+    class Truncating(FakeBackend):
+        """İlk çağrı bağlam dolduğu için kesilir; bölünmüş parçalar normal yanıt alır."""
+        def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
+            response = super().chat(model, prompt, images, schema, options, system)
+            if len(self.calls) == 1:
+                return ModelResponse(content='{"fields": {"results.be', prompt_tokens=15100, output_tokens=1284,
+                                     raw={"done_reason": "length"})
+            return response
+
+    backend = Truncating()
+    extraction = run_extract(table_doc, backend)
+    assert len(backend.calls) == 3  # kesilen tek çağrı + iki yarı; aynı istemle yeniden deneme yok
+    assert extraction.chunks == 2
+    halves = [call["prompt"].split("<document>")[1] for call in backend.calls[1:]]
+    assert all(half.lstrip().startswith("<!-- page: 1 -->") for half in halves)
+    assert "[p1-b1]" in halves[0] and "[p1-b9]" in halves[1] and "[p1-b9]" not in halves[0]
+
+
+def test_truncation_that_cannot_split_fails_document(table_doc):
+    from src.model_clients import ModelResponse
+
+    class AlwaysTruncating(FakeBackend):
+        def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
+            super().chat(model, prompt, images, schema, options, system)
+            return ModelResponse(content="{", prompt_tokens=16000, output_tokens=384, raw={"done_reason": "length"})
+
+    with pytest.raises(DocumentError) as info:
+        run_extract(table_doc, AlwaysTruncating())
+    assert info.value.error_type == "model_response_truncated"
+
+
+def test_list_items_may_come_from_different_evidence_blocks(table_doc):
+    document = table_doc.model_copy(deep=True)
+    document.blocks[1].text = "We trained a Transformer model."
+    plan = make_plan(fields=("methodology.models",), outline=("Modeller",))
+    extraction = verified(document, plan, partial(fields=[
+        {"key": "methodology.models", "status": "found", "value": ["Bi-LSTM", "Transformer"],
+         "evidence": [{"block_id": "p1-b4", "page": 1}, {"block_id": "p1-b2", "page": 1}]}]))
+    field = extraction.fields["methodology.models"]
+    assert field.in_evidence is True and field.confidence == "high"
+
+
+def test_extraction_cache_rejects_old_verifier_version(table_doc, tmp_path):
+    from src.llm_extractor import load_extraction, save_extraction
+    plan = make_plan()
+    extraction = verified(table_doc, plan, partial())
+    path = tmp_path / "e.json"
+    save_extraction(path, extraction)
+    assert load_extraction(path, SHA, "h" * 64) is not None
+    save_extraction(path, extraction.model_copy(update={"verifier_version": "1"}))
+    assert load_extraction(path, SHA, "h" * 64) is None
+
+
+def test_output_limit_stop_is_retried_with_feedback(table_doc):
+    """Bağlam dolmadan çıktı sınırına takılan (tekrara kilitlenen) yanıt geri bildirimle yeniden denenir, bölünmez."""
+    from src.model_clients import ModelResponse
+
+    class Looping(FakeBackend):
+        def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
+            response = super().chat(model, prompt, images, schema, options, system)
+            if len(self.calls) == 1:
+                return ModelResponse(content='{"fields": {"results.best": {"value": "aaaa', prompt_tokens=2000,
+                                     output_tokens=4096, raw={"done_reason": "length"})
+            return response
+
+    backend = Looping()
+    extraction = run_extract(table_doc, backend)
+    assert len(backend.calls) == 2 and extraction.chunks == 1
+    assert "Your previous answer was invalid" in backend.calls[1]["prompt"]

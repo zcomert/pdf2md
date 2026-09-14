@@ -211,8 +211,13 @@ def test_plan_hash_properties():
                                      TEXT, VISION)
 
 
-def test_estimate_tokens():
-    assert estimate_tokens("a" * 35) == 10
+def test_estimate_tokens_weights_digits():
+    # Rakam yoğun metin aynı uzunluktaki düz metinden belirgin biçimde pahalı tahmin edilir (Faz 12 kalibrasyonu).
+    prose = "fatigue detection " * 20
+    numbers = "0.91 0.95 (96) " * 24
+    assert abs(len(prose) - len(numbers)) < 5
+    assert estimate_tokens(numbers) > 2 * estimate_tokens(prose)
+    assert estimate_tokens("") == 0
 
 
 # --- CLI ----------------------------------------------------------------------------------------------------------

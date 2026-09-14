@@ -20,7 +20,7 @@ from .model_clients import ModelUnavailable
 from .errors import DocumentError
 from .schemas import Bibliographic, ProcessingPlan
 
-BIBLIOGRAPHIC_VERSION = "1"
+BIBLIOGRAPHIC_VERSION = "2"  # 2: başlıkta satır sonu tireleme kalıntısı temizliği
 FIELDS = ("title", "authors", "year", "venue", "doi")
 FIRST_PAGES = 2
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)

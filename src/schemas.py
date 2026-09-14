@@ -75,13 +75,17 @@ class DocumentState(StrictModel):
 
 
 class CollectionState(StrictModel):
+    """§21.6. `output_path` çıktı klasörüne göreli (veya `--collection-output` ile verilmiş mutlak yol)."""
     document_hashes: list[str] = []
+    documents: list[str] = []
     prompt_sha256: str | None = None
     plan_hash: str | None = None
     models: dict[str, ModelRef] = {}
     output_path: str | None = None
     created_at: str | None = None
     status: str | None = None
+    failed_documents: list[str] = []
+    warnings: list[str] = []
 
 
 class RunSummary(StrictModel):
@@ -102,6 +106,7 @@ class RunSummary(StrictModel):
     vision_calls: int = 0
     text_llm_calls: int = 0
     plan_hash: str | None = None
+    collection_output: str | None = None
     completed: int = 0
     completed_with_warnings: int = 0
     failed: int = 0
@@ -245,6 +250,7 @@ class ExtractionSource(StrictModel):
 class Extraction(StrictModel):
     """`_cache/<sha>/extractions/<plan_hash>.json` (§18). Kullanıcıya teslim edilmez."""
     schema_version: str = EXTRACTION_SCHEMA_VERSION
+    verifier_version: str | None = Field(None, description="Doğrulama kuralları sürümü; değişirse önbellek kullanılmaz")
     source: ExtractionSource
     plan_hash: str
     fields: dict[str, FieldValue] = {}

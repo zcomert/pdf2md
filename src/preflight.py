@@ -49,6 +49,20 @@ def check_dependencies(find_spec=None):
                        dependencies.install_command())
 
 
+def check_collection_output(collection_output, input_path):
+    """§21.5, §32.3: `--collection-output` var olan dosyanın üzerine yazmaz ve giriş klasörünün içinde olamaz."""
+    if not collection_output:
+        return None
+    target = Path(collection_output)
+    if target.exists():
+        return CheckResult("collection_output", False, "error", f"Koleksiyon çıktı dosyası zaten var: {target}",
+                           "Farklı bir --collection-output verin; mevcut dosyanın üzerine yazılmaz")
+    if is_within(target, input_root(input_path)):
+        return CheckResult("collection_output", False, "error",
+                           f"Koleksiyon çıktısı giriş klasörünün içinde olamaz: {target}")
+    return _ok("collection_output", f"Koleksiyon çıktısı: {target}")
+
+
 def check_xlsx(config, find_spec=None):
     """§22.1: `output.save_xlsx` için `openpyxl` gerekir; yoksa uyarı, yalnızca CSV yazılır."""
     if not config.output.save_xlsx:

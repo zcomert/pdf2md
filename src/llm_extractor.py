@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .atomic_io import atomic_write_json
-from .context_builder import build_chunks
+from .context_builder import build_chunks, split_chunk
 from .document_model import BlockType
 from .errors import DocumentError, ErrorStage
 from .evidence_verifier import confidence_for, number_tokens, numbers_in_source, text_supported
@@ -17,6 +17,10 @@ from .schemas import (Conflict, ConflictValue, EquationSelection, Evidence, Extr
                       ResultItem)
 
 EXTRACTOR_VERSION = "1"
+# Doğrulama kuralları değişince artırılır: önbellekteki çıkarımlar eski kurallarla doğrulanmış sayılır ve yeniden yapılır.
+# 2: tablo kanıtında model satırı kuralı, liste maddelerinin kanıt birleşiminde aranması (Faz 12)
+VERIFIER_VERSION = "2"
+MAX_SPLIT_DEPTH = 2  # kesilen yanıtta parça en fazla iki kez ikiye bölünür
 LIST_TYPES = {"list[str]"}
 RESULT_TYPES = {"results"}
 EQUATION_TYPES = {"equations"}
@@ -233,22 +237,37 @@ def extract(document, plan, plan_hash, text_client, max_retries, num_ctx, max_ou
     schema = response_schema(plan)
     partials = []
     calls = 0
-    for index, chunk in enumerate(chunks, start=1):
+    pending = [(chunk, 0) for chunk in chunks]
+    processed = 0
+    while pending:
+        chunk, depth = pending.pop(0)
+        processed += 1
         if checkpoint:
             checkpoint()
+        total = processed + len(pending)
         outcome = text_client.generate_structured(
-            EXTRACTION_SYSTEM, user_message(plan, chunk, index, len(chunks), document), LlmExtraction,
-            task=f"extract_{index}", max_retries=max_retries, errors_dir=errors_dir,
+            EXTRACTION_SYSTEM, user_message(plan, chunk, processed, total, document), LlmExtraction,
+            task=f"extract_{processed}", max_retries=max_retries, errors_dir=errors_dir,
             prepare=lambda data: clean_response(_drop_unknown(fields_to_list(data), plan)), schema=schema)
         calls += outcome.calls
+        if outcome.result is None and outcome.error_kind == "truncated" and depth < MAX_SPLIT_DEPTH:
+            halves = split_chunk(chunk)
+            if halves:
+                # Yanıt kesildi (tahmin gerçek token sayısının altında kaldı): parça ikiye bölünüp yeniden işlenir.
+                if logger:
+                    logger.warning("Çıkarım parçası yanıt sınırını aştı, ikiye bölünüyor: %s (parça %d)",
+                                   document.source.relative_path, processed)
+                processed -= 1
+                pending[0:0] = [(half, depth + 1) for half in halves]
+                continue
         if outcome.result is None:
-            stage = ErrorStage.validation if outcome.error_kind == "invalid" else ErrorStage.llm
-            error_type = {"invalid": "invalid_model_response", "timeout": "model_timeout"}.get(outcome.error_kind,
-                                                                                                "model_not_found")
-            raise DocumentError(stage, f"Çıkarım başarısız (parça {index}/{len(chunks)}): {outcome.error}", error_type)
+            stage = ErrorStage.validation if outcome.error_kind in ("invalid", "truncated") else ErrorStage.llm
+            error_type = {"invalid": "invalid_model_response", "truncated": "model_response_truncated",
+                          "timeout": "model_timeout"}.get(outcome.error_kind, "model_not_found")
+            raise DocumentError(stage, f"Çıkarım başarısız (parça {processed}/{total}): {outcome.error}", error_type)
         partials.append(outcome.result)
     extraction = merge_partials(partials, plan, document, plan_hash)
-    extraction.chunks, extraction.llm_calls = len(chunks), calls
+    extraction.chunks, extraction.llm_calls = len(partials), calls
     return extraction
 
 
@@ -476,6 +495,10 @@ def _verify(index, evidence, value_text, value, row_name=None, row_value=None):
             return enriched, "verified", matching, True
         return enriched, "unverified", [method for _, method in sources], False
     supported = [method for text, method in sources if text_supported(value, text)]
+    if not supported and isinstance(value, list) and len(sources) > 1:
+        # Liste maddeleri (ör. modeller) farklı bloklarda geçebilir: her madde kanıtların birleşiminde aranır.
+        if text_supported(value, "\n".join(text for text, _ in sources)):
+            supported = [method for _, method in sources]
     return enriched, None, supported or [method for _, method in sources], bool(supported)
 
 
@@ -532,6 +555,7 @@ def verify_extraction(extraction, document):
     if all(f.status == "not_found" for f in extraction.fields.values()):
         warnings.append("prompt_result_empty: istenen bilgilerin hiçbiri bulunamadı")
     extraction.warnings = list(dict.fromkeys(extraction.warnings + warnings))
+    extraction.verifier_version = VERIFIER_VERSION
     return extraction
 
 
@@ -544,7 +568,8 @@ def load_extraction(path, sha256, plan_hash):
         extraction = Extraction.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValidationError, ValueError):
         return None
-    if extraction.source.sha256 != sha256 or extraction.plan_hash != plan_hash:
+    if (extraction.source.sha256 != sha256 or extraction.plan_hash != plan_hash
+            or extraction.verifier_version != VERIFIER_VERSION):
         return None
     return extraction
 

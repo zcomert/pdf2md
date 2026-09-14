@@ -62,6 +62,25 @@ def safe_filename(name):
     return cleaned
 
 
+COLLECTION_NAME_MAX = 50
+
+
+def collection_safe_name(name):
+    """§21.5: koleksiyon adı en fazla 50 karakter, §20.1 kurallarıyla; boşsa `collection`."""
+    cleaned = safe_filename(" ".join((name or "").split()))[:COLLECTION_NAME_MAX].rstrip("._ ")
+    return cleaned if cleaned and cleaned != "_" else "collection"
+
+
+def unique_path(path):
+    """Aynı saniyede ikinci çıktı: `ad_2.md`, `ad_3.md`… (önceki çıktılar silinmez)."""
+    path = Path(path)
+    candidate, counter = path, 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}_{counter}{path.suffix}")
+        counter += 1
+    return candidate
+
+
 def safe_stem(filename):
     name = PurePosixPath(filename).name
     return safe_filename(name[:-4] if name.lower().endswith(".pdf") else name)

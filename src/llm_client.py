@@ -2,6 +2,7 @@
 ileterek yeniden deneme. Ollama'ya doğrudan değil `ModelBackend` arayüzü üzerinden erişir."""
 import json
 import math
+import re
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -9,12 +10,21 @@ from pydantic import ValidationError
 from .atomic_io import atomic_write_json
 from .model_clients import ModelNotFound, ModelTimeout
 
-CHARS_PER_TOKEN = 3.5
+# Gemma'ya karşı kalibre edildi (Faz 12, gerçek makalelerden 27 parça, sapma ±%6): rakamlar ayrı ayrı ve pahalı
+# tokenleştirilir. "3,5 karakter = 1 token" yaklaşımı sayı yoğun tablolarda gerçeğin %64'ünü veriyordu (Goodman:
+# tahmin 9.693, gerçek 15.072 token) ve bağlam taşıp yanıt yarıda kesiliyordu.
+TOKENS_PER_WORD, TOKENS_PER_DIGIT, TOKENS_PER_PUNCT = 1.10, 1.94, 0.50
+ESTIMATE_SAFETY = 1.08
+_WORD_RE = re.compile(r"[^\W\d_]+")
+_DIGIT_RE = re.compile(r"\d")
+_PUNCT_RE = re.compile(r"[^\w\s]")
 
 
 def estimate_tokens(text):
-    """Kaba token tahmini (bağlam sığma kontrolü için, Faz 09)."""
-    return math.ceil(len(text) / CHARS_PER_TOKEN)
+    """Token tahmini (bağlam sığma kontrolü): kelime, rakam ve noktalama sayısından, küçük bir güvenlik payıyla."""
+    raw = (TOKENS_PER_WORD * len(_WORD_RE.findall(text)) + TOKENS_PER_DIGIT * len(_DIGIT_RE.findall(text))
+           + TOKENS_PER_PUNCT * len(_PUNCT_RE.findall(text)))
+    return math.ceil(raw * ESTIMATE_SAFETY)
 
 
 @dataclass
@@ -23,7 +33,7 @@ class StructuredOutcome:
     error: str | None = None
     calls: int = 0
     raw_content: str | None = None
-    error_kind: str | None = None  # timeout | model_not_found | invalid
+    error_kind: str | None = None  # timeout | model_not_found | invalid | truncated
 
 
 class TextClient:
@@ -35,6 +45,13 @@ class TextClient:
         self.logger = logger
         self.log_content = log_content
         self.calls = 0  # çalıştırma boyunca metin LLM çağrısı sayısı (RunSummary.text_llm_calls)
+
+    def _context_exhausted(self, response):
+        """Yanıt bağlam penceresi dolduğu için mi kesildi (girdi + çıktı ≈ `num_ctx`)?"""
+        if not _is_length_stop(response):
+            return False
+        used = (response.prompt_tokens or 0) + (response.output_tokens or 0)
+        return used >= self.num_ctx - CONTEXT_MARGIN_TOKENS
 
     def generate_structured(self, system, user, schema_model, task, max_retries, errors_dir=None, prepare=None,
                             max_output_tokens=None, schema=None):
@@ -62,6 +79,18 @@ class TextClient:
             self.calls += 1
             content = response.content
             duration = f"{response.duration_sec:.1f} sn" if response.duration_sec is not None else "-"
+            if self._context_exhausted(response):
+                # Bağlam penceresi doldu: aynı istemle yeniden denemek aynı sonucu verir; çağıran girdiyi küçültmeli.
+                # Yalnızca çıktı sınırına takılan yanıt (tekrara kilitlenme) aşağıda geri bildirimle yeniden denenir.
+                self.logger.info("Metin modeli çağrısı: model=%s görev=%s süre=%s deneme=%d hata=yanıt uzunluk "
+                                 "sınırında kesildi (girdi %s token)", self.model, task, duration, attempt,
+                                 response.prompt_tokens)
+                if errors_dir is not None:
+                    atomic_write_json(errors_dir / f"{task}_{attempt}.json",
+                                      {"task": task, "error": "truncated", "prompt_tokens": response.prompt_tokens,
+                                       "content": content})
+                return StructuredOutcome(None, error="yanıt uzunluk sınırında kesildi", calls=calls,
+                                         raw_content=content, error_kind="truncated")
             try:
                 data = json.loads(content)
                 if prepare is not None and isinstance(data, dict):
@@ -84,6 +113,13 @@ class TextClient:
             return StructuredOutcome(parsed, calls=calls, raw_content=content)
         return StructuredOutcome(None, error=f"{max_retries + 1} denemede geçerli yanıt alınamadı", calls=calls,
                                  raw_content=content, error_kind="invalid")
+
+
+CONTEXT_MARGIN_TOKENS = 32
+
+
+def _is_length_stop(response):
+    return (response.raw or {}).get("done_reason") == "length"
 
 
 def short_error(exc):
