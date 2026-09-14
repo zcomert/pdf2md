@@ -7,6 +7,11 @@ TEXT_MODEL = "gemma4:latest"
 VISION_MODEL = "minicpm-v4.5:8b"
 FAKE_PAGE_TEXT = "Görsel modelden okunan sayfa metni."
 FAKE_LATEX = "z = \\frac{x - \\mu}{s}"
+FAKE_PLAN = {"scope": "collection", "scope_reason": "The request compares datasets across papers.",
+             "requested_fields": ["dataset.name", "results.best"], "custom_fields": [],
+             "needs": {"tables": False, "equations": False, "figures": False, "full_text": False},
+             "comparison_dimensions": ["dataset", "best result"], "output_language": "tr",
+             "output_outline": ["Veri Setleri", "En İyi Sonuçlar"], "collection_name_suggestion": "dataset_comparison"}
 
 
 def default_response(schema):
@@ -22,6 +27,8 @@ def default_response(schema):
                            {"type": "paragraph", "text": FAKE_PAGE_TEXT, "heading_level": None}]}
     if title == "PageLayoutResult":
         return {"columns": 2}
+    if title == "ProcessingPlan":
+        return dict(FAKE_PLAN)
     return {}
 
 
@@ -39,9 +46,10 @@ class FakeBackend:
             raise ModelUnavailable("sahte: Ollama kapalı")
         return {name: ModelInfo(name, f"{abs(hash(name)):064d}"[-64:], 5 * 2 ** 30) for name in self.models}
 
-    def chat(self, model, prompt, images=None, schema=None, options=None):
+    def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
         title = (schema or {}).get("title", "")
-        self.calls.append({"model": model, "task": title, "images": len(images or []), "prompt": prompt})
+        self.calls.append({"model": model, "task": title, "images": len(images or []), "prompt": prompt,
+                           "system": system, "options": options})
         if self.unavailable:
             raise ModelUnavailable("sahte: Ollama kapalı")
         queue = self.responses.get(title)
@@ -55,4 +63,4 @@ class FakeBackend:
         return [call for call in self.calls if call["task"] == title]
 
 
-__all__ = ["FakeBackend", "ModelTimeout", "ModelUnavailable", "FAKE_PAGE_TEXT", "FAKE_LATEX"]
+__all__ = ["FakeBackend", "ModelTimeout", "ModelUnavailable", "FAKE_PAGE_TEXT", "FAKE_LATEX", "FAKE_PLAN"]

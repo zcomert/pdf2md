@@ -68,19 +68,20 @@ class OllamaBackend:
         except Exception:
             return []
 
-    def chat(self, model, prompt, images=None, schema=None, options=None):
+    def chat(self, model, prompt, images=None, schema=None, options=None, system=None):
         """Yeniden denenebilir hatalarda (bağlantı, zaman aşımı, 5xx) `ollama.max_retries` kadar üstel beklemeyle
         tekrarlar. Model yoksa hemen `ModelNotFound`."""
         message = {"role": "user", "content": prompt}
         if images:
             message["images"] = list(images)
+        messages = ([{"role": "system", "content": system}] if system else []) + [message]
         attempts = self.config.max_retries + 1
         last_error = None
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
                 with self.queue:
-                    response = self._client.chat(model=model, messages=[message], format=schema,
+                    response = self._client.chat(model=model, messages=messages, format=schema,
                                                  options=options or {}, keep_alive=self.config.keep_alive)
                 data = response.model_dump() if hasattr(response, "model_dump") else dict(response)
                 return ModelResponse(content=data["message"]["content"], prompt_tokens=data.get("prompt_eval_count"),

@@ -18,6 +18,7 @@ from .figure_extractor import materialize_assets
 from .markdown_builder import RenderContext, render_full_conversion, unreadable_pages
 from .paths import ensure_under_output, resolve_output_paths
 from .pdf_parser import parse_config_hash, parse_pdf
+from .prompt_planner import compute_plan_hash, default_plan
 from .schemas import DocumentStatus, HistoryEntry, ModelRef
 
 COMPLETED_STATUSES = {DocumentStatus.completed, DocumentStatus.completed_with_warnings}
@@ -78,17 +79,16 @@ class BatchEvents:
         pass
 
 
-def decide(record, prompt_sha256, output_file, retry_failed, force):
+def decide(record, plan_hash, output_file, retry_failed, force):
     """Döner: `process`, `skip` veya `not_selected`.
 
-    Atlama (§9.3, Faz 04 hali): durum tamamlanmış, prompt hash'i aynı ve çıktı dosyası mevcut ve boş değil.
-    SHA-256 değişimi keşif aşamasında belgeyi zaten `pending` yapar. Plan hash'i (mod, modeller, ayrıştırıcı
-    sürümü) Faz 08–10'da eklenecek.
+    Atlama (§9.3): durum tamamlanmış, plan hash'i (prompt + plan + mod + modeller + digest'ler + ayrıştırıcı sürümü)
+    aynı ve çıktı dosyası mevcut ve boş değil. SHA-256 değişimi keşif aşamasında belgeyi zaten `pending` yapar.
     """
     if force:
         return "process"
     if record.status in COMPLETED_STATUSES:
-        if record.prompt_sha256 == prompt_sha256 and output_file is not None and _non_empty(output_file):
+        if record.plan_hash == plan_hash and output_file is not None and _non_empty(output_file):
             return "skip"
         return "process"
     if record.status == DocumentStatus.failed and not retry_failed:
@@ -105,7 +105,7 @@ def _non_empty(path):
 
 class BatchProcessor:
     def __init__(self, config, state, cache, output_dir, run_id, logger, prompt, force=False,
-                 events=None, cancel_token=None, now=None, ocr_settings=None, vision=None):
+                 events=None, cancel_token=None, now=None, ocr_settings=None, vision=None, plan=None, plan_hash=None):
         self.config = config
         self.state = state
         self.cache = cache
@@ -120,6 +120,9 @@ class BatchProcessor:
         self._config_hash = parse_config_hash(config.pdf)
         self.ocr_settings = ocr_settings
         self.vision = vision  # VisionSetup (istemci + model bilgisi) veya None
+        self.plan = plan or default_plan()
+        self.plan_hash = plan_hash or compute_plan_hash(self.plan, prompt.sha256, config.mode,
+                                                        vision_model=vision.info if vision else None)
 
     def run(self, discovery, summary):
         """Belgeleri sırayla işler ve `summary` sayaçlarını doldurur. İptalde `Cancelled` yayılır;
@@ -135,7 +138,7 @@ class BatchProcessor:
             for index, (pdf, record) in enumerate(documents, start=1):
                 self.cancel_token.checkpoint()
                 output_file = self.output_dir / record.output_path if record.output_path else None
-                decision = decide(record, self.prompt.sha256, output_file, self.config.processing.retry_failed, self.force)
+                decision = decide(record, self.plan_hash, output_file, self.config.processing.retry_failed, self.force)
                 if decision == "skip":
                     summary.skipped += 1
                     self.logger.info("Atlandı (değişmedi): %s", pdf.relative_path)
@@ -203,13 +206,13 @@ class BatchProcessor:
             return self._fail(rel, stage, f"{type(exc).__name__}: {exc}", summary)
 
         history = list(record.history)
-        if record.status in COMPLETED_STATUSES and record.prompt_sha256 and record.prompt_sha256 != self.prompt.sha256:
+        if record.status in COMPLETED_STATUSES and record.plan_hash != self.plan_hash and (record.plan_hash or record.prompt_sha256):
             history.append(HistoryEntry(prompt_sha256=record.prompt_sha256, plan_hash=record.plan_hash,
                                         output_path=record.output_path, status=record.status,
                                         processed_at=record.processed_at, run_id=record.last_run_id))
         elapsed = round(time.monotonic() - started, 2)
         self.state.update(rel, status=status, warnings=warnings, output_path=output_rel,
-                          prompt_sha256=self.prompt.sha256, processed_at=self._now(), processing_time_sec=elapsed,
+                          prompt_sha256=self.prompt.sha256, plan_hash=self.plan_hash, processed_at=self._now(), processing_time_sec=elapsed,
                           error_stage=None, error=None, history=history,
                           models={"vision": ModelRef(name=vision_model.name, digest=vision_model.digest)} if vision_model else {})
         if status == DocumentStatus.completed:
@@ -238,7 +241,8 @@ class BatchProcessor:
         """§12.3 tetikleyicilerine göre görsel model işleri. Döner: (belge, uyarı metinleri, kullanılan model veya None).
         Model servisi kapanırsa `FatalBatchError` (§28: batch durur)."""
         failed_ocr = {w.page for w in document.warnings if w.code in ("ocr_failed", "ocr_empty")}
-        jobs = select_vision_jobs(document, self.config.mode, None, failed_ocr)
+        needs = self.plan.needs.model_dump()
+        jobs = select_vision_jobs(document, self.config.mode, needs, failed_ocr)
         if not jobs:
             return document, [], None
         if self.vision is None:

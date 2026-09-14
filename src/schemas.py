@@ -1,6 +1,7 @@
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import ErrorStage
 
@@ -80,12 +81,72 @@ class RunSummary(StrictModel):
     parsed: int = 0
     parsed_from_cache: int = 0
     vision_calls: int = 0
+    text_llm_calls: int = 0
+    plan_hash: str | None = None
     completed: int = 0
     completed_with_warnings: int = 0
     failed: int = 0
     skipped: int = 0
     not_retried: int = Field(0, description="Önceki çalıştırmada başarısız olup --retry-failed olmadan denenmeyenler")
     total_time_sec: float | None = None
+
+
+PLAN_SCHEMA_VERSION = "1.0"
+
+
+class PlanTargets(StrictModel):
+    include: list[str] = ["*.pdf"]
+
+
+class PlanNeeds(StrictModel):
+    tables: bool = False
+    equations: bool = False
+    figures: bool = False
+    full_text: bool = False
+
+
+class CustomField(StrictModel):
+    key: str = Field(pattern=r"^custom\.[a-z0-9_]+$")
+    description: str
+
+
+class ProcessingPlan(StrictModel):
+    """İşleme planı (§10.2). Planlayıcı modelin çıktısı da bu şemayla doğrulanır."""
+    schema_version: str = PLAN_SCHEMA_VERSION
+    # Şemalı üretimde alanlar sırayla üretilir: gerekçe kapsamdan önce gelir, model önce gerekçelendirir.
+    scope_reason: str = Field(min_length=1)
+    scope: Literal["document", "collection"]
+    targets: PlanTargets = PlanTargets()
+    requested_fields: list[str] = Field(min_length=1)
+    custom_fields: list[CustomField] = []
+    needs: PlanNeeds = PlanNeeds()
+    comparison_dimensions: list[str] = []
+    output_language: str = Field(description="ISO 639-1 kodu (tr, en, ...) veya belgenin dilini korumak için 'source'")
+    output_outline: list[str] = Field(min_length=1)
+    collection_name_suggestion: str | None = None
+
+    @field_validator("requested_fields")
+    @classmethod
+    def fields_in_catalog(cls, fields):
+        from .field_catalog import is_valid_field  # döngüsel içe aktarmayı önler
+        unknown = [key for key in fields if not is_valid_field(key)]
+        if unknown:
+            raise ValueError(f"unknown fields {unknown}; use catalog keys or the 'custom.' prefix")
+        return fields
+
+    @field_validator("output_outline")
+    @classmethod
+    def outline_not_blank(cls, outline):
+        if not any(item.strip() for item in outline):
+            raise ValueError("output_outline must contain at least one heading")
+        return outline
+
+    @model_validator(mode="after")
+    def custom_fields_requested(self):
+        missing = [item.key for item in self.custom_fields if item.key not in self.requested_fields]
+        if missing:
+            raise ValueError(f"custom_fields {missing} are not listed in requested_fields")
+        return self
 
 
 class ProcessingState(StrictModel):

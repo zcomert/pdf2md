@@ -15,7 +15,10 @@ from .errors import FatalBatchError, PreflightError
 from .logger import add_file_handler, new_run_id, setup_logging, unique_run_id
 from .paths import default_output_dir, normalize
 from .pdf_discovery import discover, sync_with_state
+from .llm_client import TextClient
+from .model_clients import ModelUnavailable
 from .ollama_backend import OllamaBackend
+from .prompt_planner import PlanContext, compute_plan_hash, create_plan, describe_plan, filter_targets
 from .preflight import check_gpu, check_models, check_ocr, raise_on_errors, run_preflight
 from .vision_client import VisionClient
 from .schemas import RunSummary
@@ -105,6 +108,57 @@ def create_model_backend(config, logger):
     return OllamaBackend(config.ollama, logger, workers=config.processing.llm_workers)
 
 
+def _plan_context(config, input_path, pdf_count):
+    """`--scope auto` dışı ve `--include` (CLI veya config) planı geçersiz kılar (§10.2)."""
+    return PlanContext(input_is_file=input_path.is_file(), pdf_count=pdf_count,
+                       cli_scope=None if config.scope == "auto" else config.scope, cli_include=tuple(config.include))
+
+
+def make_plan(prompt, context, config, backend, models, logger, cache_root=None, write_cache=True, force=False):
+    """İşleme planı ve plan hash'i. Varsayılan prompt metin modelini çağırmaz. Döner: (PlanResult, plan_hash, TextClient|None)."""
+    text_model = models.get("text")
+    text_client = None
+    if text_model is not None:
+        text_client = TextClient(backend, text_model.name, config.models.text_num_ctx,
+                                 config.models.max_output_tokens, logger, log_content=config.logging.log_model_content)
+    cache_dir = cache_root / "plans" if cache_root is not None else None
+    result = create_plan(prompt, context, text_client, text_model, cache_dir=cache_dir, write_cache=write_cache,
+                         force=force, errors_dir=cache_dir / "errors" if cache_dir and write_cache else None,
+                         logger=logger)
+    plan_hash = compute_plan_hash(result.plan, prompt.sha256, config.mode, text_model=text_model,
+                                  vision_model=models.get("vision"), uses_text_model=result.uses_text_model)
+    return result, plan_hash, text_client
+
+
+def _log_plan(logger, result, plan_hash):
+    plan = result.plan
+    logger.info("Plan (%s): kapsam=%s, alanlar=%s, needs=%s, dil=%s, plan_hash=%s", result.source, plan.scope,
+                ",".join(plan.requested_fields), ",".join(k for k, v in plan.needs.model_dump().items() if v) or "-",
+                plan.output_language, plan_hash)
+    logger.info("Kapsam gerekçesi: %s", plan.scope_reason or "-")
+    for warning in result.warnings:
+        logger.warning("Plan uyarısı: %s", warning)
+    logger.debug("Plan: %s", plan.model_dump_json())
+
+
+def run_plan_only(prompt, config, input_path, output_dir, backend, models, logger, force):
+    """§10.2: plan yazdırılır, PDF açılmaz; kilit alınmaz, çıktı klasörü oluşturulmaz, plan önbelleğe yazılmaz."""
+    result = discover(input_path, config.recursive, config.include)
+    context = _plan_context(config, input_path, len(result.documents))
+    try:
+        plan_result, plan_hash, _ = make_plan(prompt, context, config, backend, models, logger,
+                                              cache_root=output_dir / "_cache", write_cache=False, force=force)
+    except ModelUnavailable as exc:
+        _print_error(exc)
+        return EXIT_PREFLIGHT
+    _log_plan(logger, plan_result, plan_hash)
+    documents = filter_targets(result.documents, plan_result.plan, context)
+    for line in describe_plan(plan_result, plan_hash, documents):
+        print(line)
+    print("PDF işlenmedi (--plan-only).")
+    return EXIT_OK
+
+
 def _install_interrupt_handler(token, logger):
     """İlk Ctrl+C güvenli iptal ister (belge yarım bırakılmaz), ikincisi hemen keser."""
     if threading.current_thread() is not threading.main_thread():
@@ -142,7 +196,7 @@ def main(argv=None, events=None, cancel_token=None):
         if args.prompt is not None and args.prompt_file is not None:
             logger.warning("--prompt ve --prompt-file birlikte verildi; --prompt önceliklidir (§10.1).")
         prompt = resolve_prompt(args, config)
-        if not prompt.is_default:
+        if not prompt.is_default and not args.plan_only:
             raise PreflightError("Prompt tabanlı çıkarım henüz desteklenmiyor (Faz 08–09).",
                                  "Tam Markdown dönüşümü için prompt vermeden çalıştırın")
         input_path = normalize(config.input_dir)
@@ -161,8 +215,7 @@ def main(argv=None, events=None, cancel_token=None):
         return EXIT_PREFLIGHT
 
     if args.plan_only:
-        print(config.model_dump_json(indent=2))
-        return EXIT_OK
+        return run_plan_only(prompt, config, input_path, output_dir, backend, models, logger, args.force)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     lock = OutputLock(output_dir, run_id)
@@ -210,13 +263,23 @@ def main(argv=None, events=None, cancel_token=None):
         for role, info in models.items():
             if info is not None:
                 logger.info("Model (%s): %s", role, info.reference)
+        context = _plan_context(config, input_path, len(result.documents))
+        try:
+            plan_result, plan_hash, text_client = make_plan(prompt, context, config, backend, models, logger,
+                                                            cache_root=output_dir / "_cache", force=args.force)
+        except ModelUnavailable as exc:
+            raise PreflightError(f"Plan oluşturulamadı: {exc}") from exc
+        _log_plan(logger, plan_result, plan_hash)
+        summary.plan_hash = plan_hash
+        if text_client is not None:
+            summary.text_llm_calls = text_client.calls
         vision = None
         if models.get("vision") is not None:
             vision = VisionSetup(VisionClient(backend, models["vision"].name, config.models.max_output_tokens, logger,
                                               log_content=config.logging.log_model_content), models["vision"])
         processor = BatchProcessor(config, state, CacheManager(output_dir), output_dir, run_id, logger, prompt,
                                    force=args.force, events=events or ConsoleEvents(), cancel_token=token,
-                                   ocr_settings=ocr_settings, vision=vision)
+                                   ocr_settings=ocr_settings, vision=vision, plan=plan_result.plan, plan_hash=plan_hash)
         cancelled = False
         stopped = None
         try:

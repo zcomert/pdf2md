@@ -60,7 +60,7 @@ def workspace(tmp_input_copy, tmp_output):
     return build
 
 
-@pytest.mark.parametrize("status, prompt_sha, output_exists, retry, force, expected", [
+@pytest.mark.parametrize("status, plan_hash, output_exists, retry, force, expected", [
     (DocumentStatus.pending, None, False, False, False, "process"),
     (DocumentStatus.processing, None, False, False, False, "process"),
     (DocumentStatus.completed, "p", True, False, False, "skip"),
@@ -71,18 +71,18 @@ def workspace(tmp_input_copy, tmp_output):
     (DocumentStatus.failed, None, False, False, False, "not_selected"),
     (DocumentStatus.failed, None, False, True, False, "process"),
 ])
-def test_decide(tmp_path, status, prompt_sha, output_exists, retry, force, expected):
+def test_decide(tmp_path, status, plan_hash, output_exists, retry, force, expected):
     output = tmp_path / "a.md"
     if output_exists:
         output.write_text("içerik", encoding="utf-8")
-    record = DocumentState(sha256=SHA, status=status, prompt_sha256=prompt_sha)
+    record = DocumentState(sha256=SHA, status=status, plan_hash=plan_hash)
     assert decide(record, "p", output, retry, force) == expected
 
 
 def test_empty_output_file_is_not_skipped(tmp_path):
     output = tmp_path / "a.md"
     output.write_text("", encoding="utf-8")
-    record = DocumentState(sha256=SHA, status=DocumentStatus.completed, prompt_sha256="p")
+    record = DocumentState(sha256=SHA, status=DocumentStatus.completed, plan_hash="p")
     assert decide(record, "p", output, False, False) == "process"
 
 
@@ -170,3 +170,21 @@ def test_options_front_matter_and_page_markers(workspace, tmp_output):
     processor.run(result, run_summary)
     markdown = (tmp_output / state.get("synthetic_single_column.pdf").output_path).read_text(encoding="utf-8")
     assert markdown.startswith("# Synthetic Study of Fatigue Detection") and "<!-- page" not in markdown
+
+
+def test_mode_change_reprocesses_and_records_plan_hash(workspace):
+    processor, result, state, run_summary = workspace(include=("synthetic_single_column.pdf",))
+    processor.run(result, run_summary)
+    first = state.get("synthetic_single_column.pdf").plan_hash
+    assert first == processor.plan_hash and len(first) == 64
+
+    processor, result, state, run_summary = workspace(include=("synthetic_single_column.pdf",))
+    processor.run(result, run_summary)
+    assert run_summary.skipped == 1
+
+    config = AppConfig.model_validate({"mode": "fast"})
+    processor, result, state, run_summary = workspace(include=("synthetic_single_column.pdf",), config=config)
+    processor.run(result, run_summary)
+    record = state.get("synthetic_single_column.pdf")
+    assert run_summary.skipped == 0 and record.plan_hash != first
+    assert record.history[-1].plan_hash == first

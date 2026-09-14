@@ -10,84 +10,110 @@ Kullanıcının doğal dil promptunu, şemayla doğrulanmış bir **işleme plan
 
 ## Modüller
 
-`src/prompt_planner.py`, `src/schemas.py` (plan şeması), `src/field_catalog.py`, `src/llm_client.py`
+`src/field_catalog.py`, `src/llm_client.py`, `src/prompt_planner.py` (yeni); `src/schemas.py` (plan şeması, `RunSummary.plan_hash/text_llm_calls`), `src/batch_processor.py` (plan hash ile atlama, plan `needs`), `src/cli.py` (`--plan-only`, plan kaydı), `src/ollama_backend.py` ve `src/model_clients.py` (`system` mesajı), `tests/fakes.py`
 
 ## Görevler
 
 ### 1. Alan kataloğu — `src/field_catalog.py`
 
-§17.3 tablosu makine tarafından okunabilir hale getirilir:
-
-- [ ] Her alan: `key` (`dataset.sample_count`), `group`, `label_tr`, `label_en`, `value_type` (`str|int|float|list[str]|table|equations|results`), `hint_sections` (`["Method", "Dataset", "Yöntem", "Veri"]`), `needs` (örn. `results.*` → `tables: true`; `equations.important` → `equations: true`)
-- [ ] Gruplar: `bibliographic`, `research`, `dataset`, `methodology`, `results`, `equations`, `evaluation`
-- [ ] Katalog dışı istek → `custom.<slug>` alanı, `value_type: str`, açıklama metniyle
-- [ ] Özel alan: `full_conversion` (varsayılan plan)
+- [x] §17.3 tablosu 27 alan: `key` (`dataset.sample_count`), `group`, `label_tr`, `label_en`, `value_type`, `hint_sections` (İngilizce + Türkçe bölüm adları; Faz 09 bölüm seçimi için), `needs`
+- [x] Gruplar: `bibliographic`, `research`, `dataset`, `methodology`, `results`, `equations`, `evaluation`
+- [x] Katalog dışı istek → `custom.<slug>` (ASCII, Türkçe karakterler dönüştürülür: "Etik Kurul Onayı" → `custom.etik_kurul_onayi`)
+- [x] Özel alan `full_conversion` (varsayılan plan; tüm `needs` açık)
+- [x] Grup öneksiz adlar tek alana karşılık geliyorsa kabul edilir (`title` → `bibliographic.title`)
 
 ### 2. Plan şeması — `src/schemas.py`
 
-§10.2 örneği temel alınır:
+- [x] `ProcessingPlan` (§10.2 örneği): `schema_version`, `scope_reason`, `scope`, `targets.include`, `requested_fields`, `custom_fields[{key, description}]`, `needs{tables, equations, figures, full_text}`, `comparison_dimensions`, `output_language` (ISO kodu veya `source`), `output_outline`, `collection_name_suggestion`
+- [x] Doğrulayıcılar: alanlar katalogda veya `custom.` önekli; `output_outline` boş olamaz; `custom_fields` anahtarları `requested_fields` içinde olmalı; `scope_reason` zorunlu
+- [x] Koleksiyon kapsamında boş `comparison_dimensions` şema hatası değil, `plan_no_comparison_dimensions` uyarısı
 
-- [ ] `ProcessingPlan`: `schema_version`, `scope` (`document|collection`), `scope_reason: str`, `targets.include: list[str]`, `requested_fields: list[str]`, `custom_fields: list[{key, description}]`, `needs: {tables, equations, figures, full_text}`, `comparison_dimensions: list[str]`, `output_language` (ISO kodu veya `source`), `output_outline: list[str]`, `collection_name_suggestion: str | None`
-- [ ] Doğrulayıcılar: `requested_fields` katalogda veya `custom.` önekli; `output_outline` boş değil; `scope=collection` ise `comparison_dimensions` boş olabilir ama uyarı
+**Karar (alan sırası):** Şemalı üretimde model alanları şemadaki sırayla yazar. `scope_reason` önceden `scope`'tan sonra ve isteğe bağlıydı; Gemma boş gerekçeyle "Başlık, veri seti… çıkar" isteğine `collection` dedi. Gerekçe zorunlu yapılıp kapsamdan önceye alındı.
 
 ### 3. Metin istemcisi — `src/llm_client.py`
 
-- [ ] Faz 07'deki `TextClient` arayüzünün Ollama gerçeklemesi
-- [ ] `generate_structured(messages, schema)` → Ollama `format=schema.model_json_schema()`, `options={num_ctx, num_predict: max_output_tokens, temperature: 0}`
-- [ ] JSON parse + Pydantic doğrulama; hata → ham yanıt `errors/` altına, doğrulama hatası mesajı bir sonraki denemede modele iletilir (§18), `llm.max_retries` kadar (config'te yoksa `ollama.max_retries` kullanılır — belgede `llm.max_retries` anahtarı §25'te yok; öneri: `ollama.max_retries` ile birleştir ve belgeye not düş)
-- [ ] `stats.text_llm_calls += 1`
-- [ ] Token tahmini: basit `len(text) / 3.5` yaklaşıklığı (bağlam sığma kontrolü için Faz 09'da kullanılacak)
+- [x] `TextClient.generate_structured(system, user, schema_model, task, max_retries, errors_dir, prepare, max_output_tokens)` → `format=<şema>`, `options={temperature: 0, num_ctx, num_predict}`, sistem mesajı ayrı
+- [x] JSON parse + Pydantic doğrulama; hata → ham yanıt `errors/<görev>_<deneme>.json`, doğrulama hatası bir sonraki denemede modele iletilir (§18)
+- [x] `prepare`: doğrulamadan önce deterministik düzeltme (planlayıcıda alan adı eşleme)
+- [x] Çağrı sayacı `TextClient.calls` → `RunSummary.text_llm_calls`
+- [x] `estimate_tokens(text) = ⌈len/3,5⌉` (Faz 09)
+- [x] Zaman aşımı / model yok → hata sonucu; `ModelUnavailable` yayılır
+
+**Karar (`llm.max_retries`):** §18'deki `llm.max_retries` anahtarı §25 yapılandırmasında yok. Yeni anahtar eklenmedi; yeniden deneme sayısı çağıran tarafından verilir: planlayıcı §10.2 gereği 1, çıkarım (Faz 09) `ollama.max_retries`. Belgeye not düşülmeli.
 
 ### 4. Planlayıcı — `src/prompt_planner.py`
 
-- [ ] Prompt kaynağı çözümleme (§10.1): `--prompt` > `--prompt-file` > config `prompt` > config `prompt_file` > varsayılan. Dosya UTF-8 okunur
-- [ ] Varsayılan / boş prompt → LLM çağrılmadan `DEFAULT_PLAN` (Faz 04)
-- [ ] Planlayıcı sistem promptu:
-  - Alan kataloğu (key + açıklama) listesi
-  - Kapsam kuralları (§21.2): karşılaştırma, sentez, "bu makaleler", "grup", "compare", "across" → `collection`
-  - Dil kuralı (§10.5): promptta dil belirtilmişse o, değilse promptun dili
-  - `needs` belirleme kuralı
-  - Yalnızca şemaya uygun JSON dönmesi
-- [ ] Girdi bağlamı: prompt metni, giriş tipi (klasör/tek PDF), keşfedilen PDF sayısı, CLI'dan açıkça verilen alanlar
-- [ ] Şema hatası → **1 kez** yeniden dene; yine başarısız → `DEFAULT_PLAN` + uyarı `plan_fallback_default` (§10.2)
-- [ ] **CLI geçersiz kılma** (§10.2): `--scope` (auto dışı) ve `--include` açıkça verildiyse plandaki karşılıkları ezilir
-- [ ] Kapsam son kararı (§21.2): tek PDF girişi → `document` (CLI `--scope collection` vermediyse)
-- [ ] Katalogdaki `needs` değerleri ile modelin `needs` değerleri birleştirilir (OR) — model unutmuş olsa bile `results.*` isteniyorsa tablolar açılır
-- [ ] Deterministik dil tespiti yedeği: model `output_language` boş dönerse Türkçe karakter/kelime sıklığına dayalı basit heuristik
+- [x] Prompt kaynağı çözümleme (§10.1) Faz 04'teki `resolve_prompt` ile; öncelik testleri eklendi
+- [x] Varsayılan / boş prompt → LLM çağrılmadan `default_plan()`
+- [x] Sistem promptu: alan kataloğu, kapsam kuralları ve örnekleri (§21.2), dil kuralı (§10.5), `needs` kuralı, prompt injection koruması (istek veri olarak `<<<REQUEST … REQUEST>>>` arasında)
+- [x] Girdi bağlamı: prompt, giriş tipi (klasör / tek PDF), CLI'dan sabitlenen kapsam ve hedefler
+- [x] Şema hatası → **1 kez** yeniden deneme; yine başarısız → varsayılan plan + `plan_fallback_default` uyarısı (§10.2)
+- [x] **Normalleştirme:** öneksiz katalog adları eşlenir, katalog dışı anahtarlar `custom.<slug>` olur ve açıklamasızsa açıklama eklenir, tekrarlar kaldırılır (tek yeniden deneme hakkı bu kolay düzeltilebilir hatalara harcanmaz)
+- [x] **CLI geçersiz kılma** (§10.2): `--scope` (auto dışı) ve `--include` (CLI veya config) plandakini ezer; gerekçeye not düşülür
+- [x] Kapsam son kararı (§21.2): tek PDF girişi → `document` (açık `--scope collection` yoksa)
+- [x] Katalog `needs` ile model `needs` birleştirilir (OR)
+- [x] Dil yedeği: model `output_language` boş dönerse açık dil isteği ("İngilizce", "in Turkish") veya Türkçe karakter/kelime heuristiği
+- [x] Plan hedefleri (`targets.include`) keşfedilen belgelere uygulanır (CLI `--include` yoksa)
+- [x] Plan çıktı token sınırı 1024: Gemma bir çağrıda bitmeyen dizgi üretip 64 sn sürdü (plan ~150–300 token)
+
+**Karar (PDF sayısı):** Faz planında girdi bağlamına "keşfedilen PDF sayısı" vardı. Gerçek denemede "a folder with 9 PDF files" bilgisi, tek tek çıkarım isteklerini (ör. "Extract the ethics approval…") de koleksiyon sanmasına yol açtı. Sayı modele verilmez; yalnızca "klasör" / "tek PDF" bilgisi verilir.
 
 ### 5. Plan hash
 
-§9.3 tanımı — tek bir yerde hesaplanır:
+- [x] `compute_plan_hash` tek yerde: plan içeriği (`scope`, `requested_fields`, `custom_fields`, `needs`, `comparison_dimensions`, `output_language`, `output_outline`), `prompt_sha256`, `mode`, metin modeli adı+digest'i, görsel model adı+digest'i, `PARSER_VERSION`, belge ve plan şema sürümleri
+- [x] Canonical JSON: `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`
+- [x] Varsayılan planda metin modeli hash'e **dahil edilmez** (Gemma güncellenince tam dönüşümler gereksiz yenilenmez; kod yorumunda)
+- [x] `targets` hash'e girmez: hangi belgelerin işleneceğini seçer, tek belgenin çıktısını değiştirmez
+- [x] Atlama kuralı (§9.3) artık `prompt_sha256` yerine `plan_hash` karşılaştırır: mod veya model digest'i değişince belge yeniden işlenir (ayrıştırma ve görsel önbellek yeniden kullanılır); eski kayıt `history`'ye geçer
+- [x] Plan ve `plan_hash` loga (INFO özet, DEBUG tam JSON), belge state kaydına ve çalıştırma özetine yazılır
+- [x] Plan `needs` görsel tetikleyicilere iletilir (`select_vision_jobs`); varsayılan planda hepsi açık, davranış değişmedi
 
-- [ ] `plan_hash = sha256(canonical_json({plan (scope, fields, needs, outline, language, dimensions), prompt_sha256, mode, text_model_name, text_model_digest, vision_model_name, vision_model_digest, parser_version, schema_versions}))`
-- [ ] Canonical JSON: `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`
-- [ ] Varsayılan planda metin modeli kullanılmadığından hash'e metin modeli **dahil edilmez** (aksi halde Gemma güncellenince tam dönüşüm gereksiz yeniden yapılır). Kararı kod yorumunda belirt
-- [ ] Plan ve `plan_hash` loga ve belge state kaydına yazılır (§10.2)
+**Geçiş notu:** Faz 07 ve öncesinde oluşturulmuş state kayıtlarında `plan_hash` yok; bu kayıtlar ilk çalıştırmada bir kez yeniden işlenir (önbellekten, model çağrısı olmadan).
 
 ### 6. Planlayıcı önbelleği
 
-- [ ] Aynı prompt + aynı metin modeli digest'i + aynı CLI geçersiz kılmaları → `<output>/_cache/plans/<anahtar>.json`'dan plan yeniden kullanılır (LLM çıktısı deterministik olmayabilir; aynı prompt için planın değişmesi gereksiz yeniden işleme ve hash oynamasına yol açar)
-- [ ] `--force` önbelleği atlar
+- [x] `<output>/_cache/plans/<anahtar>.json`; anahtar = `prompt_sha256` + metin modeli digest'i + planlayıcı sürümü + plan şema sürümü
+- [x] Önbellekte modelin **ham** planı tutulur; CLI geçersiz kılmaları, tek PDF kuralı ve `needs` birleştirmesi her çalıştırmada sonradan uygulanır. Bu yüzden faz planındaki "CLI geçersiz kılmaları anahtara girer" gereksizleşti
+- [x] `--force` önbelleği atlar; planlayıcı istemi değişince `PLANNER_VERSION` artırılır
 
 ### 7. `--plan-only`
 
-- [ ] Preflight (kilit dahil değil — PDF işlenmiyor, çıktıya yazılmıyor; ancak plan önbelleği yazılmaz) → keşif (sadece sayım ve hedef listesi) → plan → konsola okunabilir biçimde yazdır: kapsam + gerekçe, hedef dosyalar, istenen alanlar (etiketleriyle), `needs`, çıktı başlıkları, dil, `plan_hash`
-- [ ] PDF açılmaz, çıkış kodu 0 (§38 kriter 7)
-- [ ] `--plan-only` ile kilit ve çıktı klasörü oluşturma atlanır (log yalnızca konsola)
+- [x] Preflight (Ollama ve modeller dahil, kilit hariç) → keşif (yalnızca dosya listesi; SHA-256 hesaplanmaz, PDF açılmaz) → plan → konsola: kaynak, kapsam + gerekçe, hedef filtresi ve dosyalar, istenen alanlar (etiketleriyle), `needs`, karşılaştırma boyutları, dil, çıktı başlıkları, `plan_hash`, uyarılar
+- [x] Çıkış kodu 0 (§38 kriter 7); planlayıcı sırasında Ollama kapanırsa 2
+- [x] Kilit alınmaz, çıktı klasörü oluşturulmaz, plan önbelleğe yazılmaz (varsa okunur), log yalnızca konsola
+
+Prompt tabanlı çıkarım Faz 09'da geldiği için varsayılan olmayan prompt `--plan-only` olmadan hâlâ başlangıçta reddedilir (çıkış 2).
+
+## Gerçek Gemma Sonuçları (`gemma4:latest`)
+
+| Prompt | Kapsam | Alanlar (özet) | Süre |
+|---|---|---|---:|
+| Başlık, veri seti, yöntem ve en iyi sonuçları çıkar. | document | title, dataset.name, methodology.*, results.best | ~12 sn (yükleme dahil) |
+| Bu makale grubunu akademik olarak özetle. | collection | — | ~10 sn |
+| İlgili makalelerde kullanılan veri setlerini karşılaştır. | collection | dataset.name | ~9 sn |
+| Çalışmaların özgün yönlerini ve ortak katkılarını çıkar. | collection | research.contributions | ~9 sn |
+| Kullanılan yöntemleri, modelleri ve performans metriklerini tablo halinde karşılaştır. | collection | methodology.models, results.metrics | ~10 sn |
+| Sınırlılıkları ve gelecek çalışma önerilerini sentezle. | collection | evaluation.limitations, evaluation.future_work | ~7 sn |
+| Extract the ethics approval and code availability statements. | document | custom.ethics_approval, custom.code_availability (açıklamalı) | ~9 sn |
+| Bu makalede kullanılan formülleri açıklamalarıyla listele. | document | equations.important | ~10 sn |
+
+Tamamlanma kriteri komutu (gerçek set, 9 PDF): `collection`, alanlar `dataset.name, dataset.sample_count, dataset.classes, results.best`, `tables=evet`, karşılaştırma boyutları `dataset, results`, dil `tr`, PDF işlenmedi, çıktı klasörü oluşmadı.
+
+## Bilinen Sınırlamalar
+
+- `scope_reason` ve kapsam kararı modele bağlıdır; `--scope` her zaman kesin sonuç verir. İlk denemede (örneksiz, sayı bilgili istem) 6 örnekten 1'i yanlıştı; istem düzeltmesinden sonra 8/8 doğru
+- Gerekçe metni İngilizce gelebilir (çıktı dili yalnızca başlıklar için uygulanır)
+- `collection_name_suggestion` bazen uzun; koleksiyon adı Faz 10'da güvenli ada dönüştürülecek
+- Plan önbelleği ham planı tuttuğundan, aynı prompt farklı giriş türüyle (klasör / tek PDF) ilk planın alanlarını kullanır; kapsam kuralı yine uygulanır
 
 ## Testler
 
-- Prompt kaynak önceliği (dosya + CLI + config kombinasyonları)
-- `FakeTextClient` ile: geçersiz JSON → 1 yeniden deneme → varsayılan plan + uyarı
-- `--scope document` verildiğinde planlayıcı `collection` dese de sonuç `document`
-- Tek PDF girişi + karşılaştırma promptu (scope auto) → `document` (§38 kriter 8)
-- Plan hash: mod değişince değişir; aynı girdiyle sabit; model digest değişince değişir
-- Katalog `needs` birleştirmesi
-- `@requires_ollama` gerçek Gemma ile örnek promptlar (§21.3 listesi + "Başlık, veri seti, yöntem ve en iyi sonuçları çıkar.") → plan şemadan geçer, beklenen alanlar ve kapsam makul (snapshot olarak kaydedilir, elle incelenir)
+- [x] `test_prompt_planner.py` — katalog grupları, takma ad ve `custom` slug; katalog `needs`; şema doğrulayıcıları; normalleştirme; prompt kaynak önceliği; varsayılan promptun LLM çağırmaması; sistem promptu ve seçenekler; geçersiz JSON → 1 yeniden deneme → varsayılan plan + uyarı + `errors/` kaydı; ikinci denemede başarı; `ModelUnavailable` yayılması; `--scope` geçersiz kılma; tek PDF + karşılaştırma → `document` (§38 kriter 8); `--include` ve plan hedef filtresi; boyutsuz koleksiyon uyarısı; dil yedeği; plan önbelleği (yeniden kullanım, `force`, model digest değişimi, yazmama); plan hash (sabitlik, mod/prompt/görsel digest ile değişim, varsayılan planda metin digest'inden bağımsızlık, hedeflerden bağımsızlık); CLI `--plan-only` (koleksiyon planı, çıktı klasörü yok, tek PDF, `--scope`); state ve özetteki `plan_hash`; **gerçek Gemma** ile §21.3 örnekleri + çıkarım promptu (6 test)
+- [x] `test_batch_processor.py` — `decide` plan hash'e göre; mod değişince yeniden işleme ve `history`
 
 ## Tamamlanma Kriterleri
 
-- [ ] `process_papers.py tests\fixtures\real --prompt "Veri setlerini ve en iyi sonuçları karşılaştır." --plan-only` → `collection` kapsamlı plan, PDF işlenmez
-- [ ] Çıktı klasörü `--plan-only` ile oluşturulmaz
-- [ ] Plan hash state'e yazılıyor
-- [ ] `pytest` yeşil
+- [x] `process_papers.py tests\fixtures\real --prompt "Veri setlerini ve en iyi sonuçları karşılaştır." --plan-only` → `collection` kapsamlı plan, PDF işlenmez
+- [x] Çıktı klasörü `--plan-only` ile oluşturulmaz
+- [x] Plan hash state'e yazılıyor
+- [x] `pytest` yeşil — 449 test (441 sahte arka uçla + 8 `requires_ollama`)

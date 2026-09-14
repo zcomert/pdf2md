@@ -47,5 +47,5 @@ class ModelBackend(Protocol):
         ...
 
     def chat(self, model: str, prompt: str, images: list[bytes] | None = None, schema: dict | None = None,
-             options: dict | None = None) -> ModelResponse:
+             options: dict | None = None, system: str | None = None) -> ModelResponse:
         ...
