@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 
 from .document_model import BlockType
+from .equation_latex import (equation_glyphs, fraction_rules, glyph_region, page_lines, strip_number,
+                             text_layer_latex)
 from .layout_analyzer import CAPTION_RE, RawBlock, bbox_union, heading_score
 from .table_extractor import assess_cells, clean_cell, merged_cells_from_bboxes, rows_from_words, to_html, to_markdown
 
@@ -16,6 +18,15 @@ TABLE_CAPTION_RE = re.compile(r"^(?:Table|TABLE|Tablo)\s*([\dIVX]+[a-z]?)")
 FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|FIGURE|Fig\.|FIG\.|Şekil|ŞEKİL)\s*(\d+[a-z]?)")
 EQUATION_NUMBER_RE = re.compile(r"\((\d{1,3}(?:\.\d{1,2})?[a-z]?)\)")
 MATH_SYMBOLS = set("=∑∫∂√≤≥±×÷∞≈≠∈∉∀∃∇∏λμσαβγδθπωεφψΣΠΔΩ→←⇒⇔∧∨⊂⊆∪∩")
+# Numara satırının önündeki kontrol/özel kullanım glifleri (LaTeX'in görünmez kutuları, ör. "\x08 (1)")
+NUMBER_NOISE_RE = re.compile("[\x00-\x1f\x7f\ue000-\uf8ff]")
+# Formül gövdesinde geçen ve düzyazı sayılmayan kelimeler (cases, operatör adları)
+MATH_WORDS = {"if", "otherwise", "else", "and", "with", "log", "exp", "max", "min", "arg", "argmax",
+              "argmin", "sin", "cos", "tan", "lim", "sup", "inf", "det", "mod", "subject", "all", "then"}
+# Formülün hemen altındaki açıklama cümlesinin ilk sözcükleri ("where S is ...")
+PROSE_LEADS = {"where", "here", "which", "whereas"}
+# Gövde satırının numara satırıyla dikeyde örtüşmesi gereken en küçük oran (komşu düzyazı satırları alınmasın)
+EQUATION_BODY_MIN_OVERLAP = 0.3
 
 TABLE_REGION_MAX_GAP = 30.0
 FIGURE_CAPTION_MAX_GAP = 60.0
@@ -51,6 +62,8 @@ class EquationElement:
     raw_text: str
     reasons: list
     block: RawBlock | None = None
+    line_bboxes: list = field(default_factory=list)
+    latex: str | None = None
 
 
 @dataclass
@@ -143,8 +156,16 @@ def line_has_math(line):
 
 
 def line_is_prose(line):
-    words = re.findall(r"[^\W\d_]{3,}", line.text)
-    return len(words) >= 6 and "=" not in line.text and line.math_chars < 0.2 * max(1, line.chars)
+    """Formüle ait olmayan düzyazı satırı: eşittir yok, matematik fontu az ve en az üç sözcük (cases içindeki "if",
+    "otherwise" ve operatör adları sayılmaz), "where ..." ile başlayan açıklama ya da iki noktayla biten giriş cümlesi
+    ("we predict:")."""
+    text = line.text.strip()
+    if text.split(" ", 1)[0].casefold() in PROSE_LEADS:
+        return True
+    if "=" in text or line.math_chars >= 0.2 * max(1, line.chars):
+        return False
+    words = [w for w in re.findall(r"[^\W\d_]{3,}", text) if w.casefold() not in MATH_WORDS]
+    return len(words) >= 3 or (text.endswith(":") and bool(words))
 
 
 def horizontal_rules(drawings, span, min_width_ratio=0.4):
@@ -232,6 +253,7 @@ def detect_page_visuals(page, number, blocks, body_size, gutter, images=None, dr
 
     blocks = _detect_tables(page, number, blocks, body_size, gutter, width, drawings, clusters, visuals)
     blocks = _detect_equations(number, blocks, gutter, width, visuals)
+    _equation_text_layer(page, drawings, visuals)
     blocks = _detect_figures(number, blocks, gutter, width, height, images, clusters, visuals)
     return blocks, visuals
 
@@ -380,24 +402,22 @@ def _detect_equations(number, blocks, gutter, width, visuals):
             for line in block.lines if not line.vertical]
     claimed = set()
     for block, line in flow:
-        text = line.text.strip()
-        standalone = EQUATION_NUMBER_RE.fullmatch(text)
-        if standalone and line.bbox[2] - line.bbox[0] > EQUATION_NUMBER_MAX_WIDTH:
-            standalone = None
+        text = NUMBER_NOISE_RE.sub("", line.text).strip()
+        standalone = _is_number_line(line)
         inline = None if standalone else re.match(r"^(.*\S)\s+" + EQUATION_NUMBER_RE.pattern + r"$", text)
         if standalone:
             span = column_span(line.bbox, width, gutter)
             body = [(b, l) for b, l in flow if id(l) not in claimed and l is not line
-                    and _vertical_overlap(l.bbox, line.bbox, 3) and l.bbox[2] <= line.bbox[0] + 2
+                    and _vertical_overlap(l.bbox, line.bbox) and l.bbox[2] <= line.bbox[0] + 2
                     and l.bbox[0] >= span[0] - 2 and line.bbox[0] - l.bbox[2] <= EQUATION_MAX_BODY_DISTANCE
-                    and not line_is_prose(l) and not EQUATION_NUMBER_RE.fullmatch(l.text.strip())]
+                    and not line_is_prose(l) and not _is_number_line(l)]
             # Kaynakça gibi dar satırlı metinlerdeki "(4)" numara sayılmaz: gövdede matematik olmalı.
             if not body or not any(line_has_math(l) for _, l in body):
                 continue
             body = _grow_equation(flow, body, line, claimed, span)
             eq_number = standalone.group(1)
             members = body + [(block, line)]
-            raw = "\n".join(l.text.strip() for _, l in sorted(body, key=lambda item: item[1].bbox[1]))
+            raw = _raw_text(l for _, l in sorted(body, key=lambda item: item[1].bbox[1]))
         elif inline and line_has_math(line) and not line_is_prose(line):
             eq_number = inline.group(2)
             members = [(block, line)]
@@ -408,7 +428,8 @@ def _detect_equations(number, blocks, gutter, width, visuals):
         if any(line_has_math(l) for _, l in members):
             reasons.append("math")
         bbox = bbox_union(l.bbox for _, l in members)
-        visuals.equations.append(EquationElement(number, bbox, eq_number, raw + f"  ({eq_number})", reasons))
+        visuals.equations.append(EquationElement(number, bbox, eq_number, raw + f"  ({eq_number})", reasons,
+                                                 line_bboxes=[l.bbox for _, l in members]))
         claimed.update(id(l) for _, l in members)
         visuals.equations[-1].block = RawBlock(number, bbox, [l for _, l in sorted(members, key=lambda m: m[1].bbox[1])],
                                                type=BlockType.equation)
@@ -431,12 +452,45 @@ def _detect_equations(number, blocks, gutter, width, visuals):
     return result
 
 
-def _vertical_overlap(a, b, tolerance):
-    return min(a[3], b[3]) - max(a[1], b[1]) >= -tolerance
+def _equation_text_layer(page, drawings, visuals):
+    """Formül kutusu numara hariç gövde karakterlerine daraltılır (görsel model kırpımı numarayı içermesin) ve metin
+    katmanından LaTeX kurulur. Kurulamayan formülde `latex` boş kalır."""
+    if not visuals.equations:
+        return
+    lines = page_lines(page)
+    for element in visuals.equations:
+        try:
+            glyphs = strip_number(equation_glyphs(lines, element.line_bboxes), element.number)
+            if glyphs:
+                element.bbox = glyph_region(glyphs)
+                element.latex = text_layer_latex(glyphs, fraction_rules(drawings, element.bbox))
+        except Exception:  # yeniden kurma hatası formül tespitini ve sayfanın geri kalanını etkilememeli
+            element.latex = None
+
+
+def _vertical_overlap(a, b):
+    """Satırlar dikeyde gerçekten örtüşüyor mu: kısa satırın yüksekliğinin en az `EQUATION_BODY_MIN_OVERLAP` oranı.
+    Bitişik satır aralığı (üstteki/alttaki düzyazı) gövdeye alınmaz."""
+    overlap = min(a[3], b[3]) - max(a[1], b[1])
+    return overlap > 0 and overlap >= EQUATION_BODY_MIN_OVERLAP * min(a[3] - a[1], b[3] - b[1])
+
+
+def _is_number_line(line):
+    """Tek başına duran dar "(n)" satırı; eşleşme nesnesi döner."""
+    match = EQUATION_NUMBER_RE.fullmatch(NUMBER_NOISE_RE.sub("", line.text).strip())
+    return match if match and line.bbox[2] - line.bbox[0] <= EQUATION_NUMBER_MAX_WIDTH else None
+
+
+def _raw_text(lines):
+    """Ham formül metni: satırlardaki kontrol ve özel kullanım glifleri (büyük parantez parçaları) atılır."""
+    texts = (NUMBER_NOISE_RE.sub("", l.text).strip() for l in lines)
+    return "\n".join(t for t in texts if t)
 
 
 def _grow_equation(flow, body, number_line, claimed, span):
-    """Çok satırlı formüller: gövdenin hemen üstünde/altında (≤4 pt) aynı yatay aralıkta matematik içeren satırlar."""
+    """Çok satırlı formüller: gövdeyle dikeyde örtüşen ya da hemen üstünde/altında (≤4 pt) aynı yatay aralıkta
+    matematik içeren satırlar (alt/üst sınırlar, kesir pay/paydaları, cases satırları). Gövde kutusunun tamamen
+    içinde kalan satırlar (ör. "1", "700") matematik fontu olmasa da alınır."""
     members = list(body)
     changed = True
     while changed:
@@ -445,9 +499,10 @@ def _grow_equation(flow, body, number_line, claimed, span):
         for block, line in flow:
             if id(line) in claimed or line is number_line or any(line is l for _, l in members):
                 continue
-            near = (0 <= union[1] - line.bbox[3] <= 4) or (0 <= line.bbox[1] - union[3] <= 4)
+            near = union[1] - line.bbox[3] <= 4 and line.bbox[1] - union[3] <= 4
+            inside = overlap_ratio(line.bbox, union) >= 0.9
             if near and line.bbox[2] <= number_line.bbox[0] + 2 and line.bbox[0] >= max(union[0] - 60, span[0] - 2) \
-                    and line_has_math(line) and not line_is_prose(line):
+                    and (inside or line_has_math(line)) and not line_is_prose(line):
                 members.append((block, line))
                 changed = True
     return members

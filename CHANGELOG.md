@@ -1,5 +1,15 @@
 # Değişiklik Günlüğü
 
+## Yayımlanmamış
+
+### Formül dönüşümü
+
+- Metin katmanından LaTeX (`src/equation_latex.py`): kesir çizgisi, büyük operatör sınırları, üs/alt simge, aksan, matematik alfasayısalları, `\text{}`/operatör adları. FAST modda da LaTeX; kurulan formül görsel modele gönderilmez
+- Formül numarası `\tag{n}` ile korunur
+- Tespit: numara önündeki görünmez glif (`\x08 (1)`) artık numarayı gizlemiyor; bitişik düzyazı satırları formüle alınıp metinden silinmiyor; "where …" açıklama satırı formüle katılmıyor; alt sınır ve kesir satırları formüle dahil
+- Görsel model: numarasız ve komşu metni örtülmüş kırpım, metin katmanı ipucu, kaçışsız LaTeX JSON onarımı, geçersiz LaTeX'te geri bildirimli yeniden deneme, numara/`\tag`/sondaki noktalama temizliği
+- `PARSER_VERSION` 0.4.0 (önbellekteki `document.json` yeniden üretilir)
+
 ## 1.0.0 — ilk sürüm
 
 Yerel akademik PDF işleme, Markdown dönüştürme ve bilgi çıkarım sistemi. Gereksinim belgesi: `gereksinim-analizi.md`; uygulama kararları: `fazlar/` ve `docs/gereksinim-guncellemeleri.md`.

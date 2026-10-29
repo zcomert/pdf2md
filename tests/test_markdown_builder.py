@@ -186,6 +186,12 @@ def test_equation_rendering():
         r"```text" + "\nz = (x - mu) / s  (1)\n" + r"```" + "\n\n[latex_unavailable]\n\n$$\n" + r"z = \frac{x-\mu}{s}" + "\n$$ [latex_unverified]\n")
 
 
+
+def test_equation_number_is_tagged():
+    valid = Equation(id="eq-1", number="3", latex=r"z = \frac{x}{s}", latex_valid=True, page=1, bbox=(0, 0, 1, 1))
+    document = visual_document(equations=[valid], blocks=[ref_block(0, BlockType.equation, "eq-1")])
+    assert build_full_conversion(document, plain()) == "$$\n" + r"z = \frac{x}{s} \tag{3}" + "\n$$\n"
+
 def test_figure_rendering_and_unavailable_marker():
     figure = Figure(id="fig-1", number="3", caption="Fig. 3. A [draft] pipeline", page=1, bbox=(0, 0, 1, 1),
                     cache_path="figures/figure_03.png")

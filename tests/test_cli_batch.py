@@ -5,7 +5,7 @@ import pytest
 from src.batch_processor import BatchEvents, CancelToken
 from src.cli import EXIT_CANCELLED, EXIT_DOC_FAILED, EXIT_OK, EXIT_PREFLIGHT, main
 from src.document_model import DocumentModel
-from tests.fakes import FAKE_LATEX, FAKE_PAGE_TEXT
+from tests.fakes import FAKE_PAGE_TEXT
 from tests.helpers import input_snapshot
 
 UNOPENABLE = {"corrupt.pdf", "not_a_pdf.PDF", "synthetic_encrypted.pdf"}
@@ -60,9 +60,9 @@ def test_tables_equations_and_figures_in_markdown(tmp_input_copy, tmp_output):
     folder = tmp_output / "synthetic_table_equation"
     markdown = (folder / "synthetic_table_equation.md").read_text(encoding="utf-8")
     assert "| Model | Accuracy | F1 |\n|---|---:|---:|\n| Bi-LSTM | 0.99 | 0.98 |" in markdown
-    # BALANCED: formüller görsel modelle LaTeX'e çevrilir (§12.3 equation_requested)
-    assert f"$$\n{FAKE_LATEX}\n$$" in markdown and "[latex_unavailable]" not in markdown
-    assert "minicpm-v4.5:8b@sha256:" in markdown.split("---")[1]  # front matter'da görsel model ve digest'i
+    # Formüller metin katmanından LaTeX'e çevrilir; numara `\tag` ile korunur
+    assert "$$\nz = (x - mu)/s \\tag{1}\n$$" in markdown and "[latex_unavailable]" not in markdown
+    assert "models: {}" in markdown.split("---")[1]  # model kullanılmadı: front matter'da model kaydı yok
     assert "![Figure 1. Proposed pipeline](assets/figures/figure_01.png)" in markdown
     assert (folder / "assets" / "figures" / "figure_01.png").read_bytes().startswith(b"\x89PNG")
     assert markdown.count("Bi-GRU") == 1  # tablo hücreleri paragraf olarak tekrar yazılmaz
@@ -206,33 +206,36 @@ def test_mode_controls_vision_calls_and_log_records_triggers(tmp_input_copy, tmp
     assert run(tmp_input_copy, tmp_output, *args, "--mode", "fast") == EXIT_OK
     assert fake_model_backend.vision_calls() == []  # FAST: formül/şekil için görsel model yok
     markdown = (tmp_output / "synthetic_table_equation" / "synthetic_table_equation.md").read_text(encoding="utf-8")
-    assert "[latex_unavailable]" in markdown
+    # FAST modda da formül LaTeX'i metin katmanından gelir
+    assert "z = (x - mu)/s \\tag{1}" in markdown and "[latex_unavailable]" not in markdown
     assert run(tmp_input_copy, tmp_output, *args, "--mode", "full", "--force") == EXIT_OK
-    assert {call["task"] for call in fake_model_backend.vision_calls()} == {"EquationResult", "FigureResult"}
+    # LaTeX'i metin katmanından kurulan formül FULL modda da görsel modele gitmez
+    assert {call["task"] for call in fake_model_backend.vision_calls()} == {"FigureResult"}
     # §38 kriter 24: log dosyasında her görsel çağrı tetikleyicisiyle
     log = "\n".join(p.read_text(encoding="utf-8") for p in (tmp_output / "logs").glob("*.log"))
-    assert "tetikleyici=candidate_full" in log and "tetikleyici=equation_requested" in log
+    assert "tetikleyici=candidate_full" in log and "tetikleyici=equation_requested" not in log
 
 
-def test_vision_results_are_cached(tmp_input_copy, tmp_output, fake_model_backend):
-    args = ("--include", "synthetic_table_equation.pdf")
+def test_vision_results_are_cached(tmp_input_copy, tmp_output, fake_model_backend, no_ocr_config):
+    args = ("--include", "synthetic_scanned.pdf", "--config", str(no_ocr_config))
     run(tmp_input_copy, tmp_output, *args)
     first = len(fake_model_backend.vision_calls())
-    record = load_state(tmp_output)["documents"]["synthetic_table_equation.pdf"]
+    record = load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]
     (tmp_output / record["output_path"]).unlink()
     assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK
-    assert first == 2 and len(fake_model_backend.vision_calls()) == first  # formül sonuçları önbellekten
+    assert first == 1 and len(fake_model_backend.vision_calls()) == first  # sayfa metni önbellekten
 
 
-def test_model_service_stopping_mid_run_stops_batch(tmp_input_copy, tmp_output, capsys, fake_model_backend):
+def test_model_service_stopping_mid_run_stops_batch(tmp_input_copy, tmp_output, capsys, fake_model_backend,
+                                                    no_ocr_config):
     # §28: Ollama çalışma sırasında kapanırsa belge failed olmaz, batch durur, durum kaydedilir
     from src.model_clients import ModelUnavailable
-    fake_model_backend.responses["EquationResult"] = [ModelUnavailable("bağlantı koptu")]
-    args = ("--include", "synthetic_table_equation.pdf", "--include", "synthetic_two_column.pdf")
+    fake_model_backend.responses["PageTextResult"] = [ModelUnavailable("bağlantı koptu")]
+    args = ("--include", "synthetic_scanned.pdf", "--include", "synthetic_two_column.pdf", "--config", str(no_ocr_config))
     assert run(tmp_input_copy, tmp_output, *args) == EXIT_DOC_FAILED
     assert "Batch durduruldu" in capsys.readouterr().err
     documents = load_state(tmp_output)["documents"]
-    assert documents["synthetic_table_equation.pdf"]["status"] == "pending"
+    assert documents["synthetic_scanned.pdf"]["status"] == "pending"
     assert documents["synthetic_two_column.pdf"]["status"] == "pending"  # sonraki belgeye geçilmedi
     assert run(tmp_input_copy, tmp_output, *args) == EXIT_OK  # servis döndü: kaldığı yerden devam
 
@@ -240,7 +243,8 @@ def test_model_service_stopping_mid_run_stops_batch(tmp_input_copy, tmp_output, 
 def test_vision_model_missing_with_vision_not_required(tmp_input_copy, tmp_output, fake_model_backend, tmp_path):
     fake_model_backend.models = ["gemma4:latest"]
     config = tmp_path / "no_vision.yaml"
-    config.write_text("models:\n  vision_required: false\n", encoding="utf-8")
-    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_table_equation.pdf", "--config", str(config)) == EXIT_OK
-    record = load_state(tmp_output)["documents"]["synthetic_table_equation.pdf"]
-    assert record["status"] == "completed_with_warnings" and record["warnings"][0].startswith("vision_unavailable")
+    config.write_text("models:\n  vision_required: false\nocr:\n  enabled: false\n", encoding="utf-8")
+    assert run(tmp_input_copy, tmp_output, "--include", "synthetic_scanned.pdf", "--config", str(config)) == EXIT_OK
+    record = load_state(tmp_output)["documents"]["synthetic_scanned.pdf"]
+    assert record["status"] == "completed_with_warnings"
+    assert any(warning.startswith("vision_unavailable") for warning in record["warnings"])

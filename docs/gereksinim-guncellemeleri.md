@@ -34,6 +34,9 @@ Durum: **v1.0.0 öncesi — kullanıcı onayı bekliyor.**
 - Görsel görevlerde çıktı token sınırı: sayfa düzeni 32, şekil 256, formül 512, tablo 3072 (Faz 07).
 - **§13** Görselden gelen tablo sayısı aynı bölgenin metin katmanında yoksa tahmin edilmez, `[unclear]` yazılır (Faz 07).
 - `[table_structure_unavailable]` ve `[latex_unavailable]` işaretleri belgeyi `completed_with_warnings` yapmaz (Faz 05).
+- **Formül LaTeX'i önce metin katmanından kurulur** (`src/equation_latex.py`): karakter konumu/puntosu/fontu ve kesir çizgilerinden kesir, büyük operatör sınırları, üs/alt simge, aksan, `\mathbf`/`\mathbb`, `\text{}` ve operatör adları. Kurulan formül tablolardaki kural gibi hiçbir modda görsel modele gönderilmez; FAST modda da LaTeX üretilir. Tanınmayan glif, çok satırlı yapı (cases, matris) veya kök işaretinde kurulum yapılmaz, formül görsel modele kalır.
+- Görsel modele giden formül kırpımı numarayı içermez; dolgu payındaki komşu metin beyazla örtülür. İsteme bölgenin metin katmanı karakterleri ipucu olarak eklenir. Kaçışsız LaTeX JSON'u (`\frac` → form-feed) onarılır; geçersiz LaTeX bir kez geri bildirimle yeniden istenir.
+- Formül numarası Markdown'da `\tag{n}` ile yazılır. Numaranın önündeki görünmez glif (`\x08 (1)`) numara tespitini engellemez; numara satırına yalnızca bitişik olan düzyazı satırları formüle alınmaz (metin kaybı giderildi).
 
 ## §17–19 Çıkarım ve doğrulama
 

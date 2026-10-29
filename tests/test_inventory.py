@@ -227,7 +227,7 @@ def test_inventory_end_to_end_and_cache(tmp_input_copy, tmp_output, tmp_path, fa
     single, table = rows["synthetic_single_column.pdf"], rows["synthetic_table_equation.pdf"]
     assert single["title"] == "Synthetic Study of Fatigue Detection" and single["authors"] == "Fixture Author; Second Author"
     assert table["results.best_accuracy"] == "0.99" and table["pages"] == "1"
-    assert int(table["text_llm_calls"]) >= 2 and table["vision_calls"] == "2"
+    assert int(table["text_llm_calls"]) >= 2 and table["vision_calls"] == "0"
 
     # Çıktı silinip belge yeniden işlenince künye ve analitik sütunlar önbellekten: metin çağrısı yok
     state = json.loads((tmp_output / "processing_state.json").read_text(encoding="utf-8"))

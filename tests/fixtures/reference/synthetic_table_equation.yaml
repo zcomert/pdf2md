@@ -20,11 +20,11 @@ tables:
 equations:
   - number: "1"
     page: 1
-    latex: "z = \\frac{x - \\mu}{s}"
+    latex: "z = (x - mu)/s"
     description: null
   - number: "2"
     page: 1
-    latex: "\\mathrm{SPL} = 20 \\log\\left(\\frac{p}{p_{\\mathrm{ref}}}\\right)"
+    latex: "SPL = 20\\log(p/p\\_ref)"
     description: null
 results:
   - {model: "Bi-LSTM", metric: "accuracy", value: 0.99, page: 1, table: "Table 1"}

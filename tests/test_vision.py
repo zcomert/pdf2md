@@ -10,7 +10,7 @@ from src.evidence_verifier import validate_latex
 from src.markdown_builder import build_full_conversion, unreadable_pages
 from src.model_clients import ModelNotFound, ModelTimeout, ModelUnavailable
 from src.preflight import check_models, check_vram, normalize_model_name
-from src.vision_client import VisionClient
+from src.vision_client import VisionClient, equation_hint, repair_json_backslashes
 from src.vision_enrichment import VisionRun, apply_vision_results, run_vision_jobs
 from src.vision_triggers import TRIGGER_MODES, VisionJob, select_vision_jobs
 from tests.fakes import FakeBackend
@@ -91,6 +91,16 @@ def test_full_mode_adds_all_candidates_and_page_analysis():
     assert sum(1 for job in jobs if job.ref_id == "eq-1") == 1
 
 
+
+def test_equation_with_text_layer_latex_is_not_sent():
+    doc = document()
+    doc.equations[0].latex = "z = x"
+    doc.candidates[2].needs_vision = False
+    for mode in ("balanced", "full"):
+        assert not any(job.task == "equation" for job in select_vision_jobs(doc, mode))
+    jobs = [job for job in select_vision_jobs(document(), "balanced") if job.task == "equation"]
+    assert jobs[0].hint.endswith(": z = x")
+
 def test_needs_disable_requested_triggers_and_ocr_failed_trigger():
     doc = document()
     jobs = select_vision_jobs(doc, "balanced", needs={"equations": False, "tables": False, "figures": False},
@@ -133,6 +143,37 @@ def test_client_retries_invalid_json_with_feedback(tmp_path):
     assert "previous answer was invalid" in fake.calls[1]["prompt"]
     assert list(tmp_path.iterdir())
 
+
+
+def test_json_backslash_repair_keeps_latex_commands():
+    # Model `\frac`, `\text`, `\{` kaçışsız yazınca JSON form-feed/sekme okur ya da geçersiz kaçış hatası verir.
+    raw = r'{"latex": "\frac{a}{b} \text{if} \{x\} \\beta \nabla", "number": null}'
+    assert json.loads(repair_json_backslashes(raw))["latex"] == r"\frac{a}{b} \text{if} \{x\} \beta \nabla"
+    proper = json.dumps({"latex": r"\frac{a}{b} \\ \beta", "note": "line\n break \u00e9"})
+    assert json.loads(repair_json_backslashes(proper)) == json.loads(proper)
+
+
+def test_client_retries_invalid_latex_and_keeps_last_answer():
+    fake = FakeBackend()
+    fake.responses["EquationResult"] = [{"latex": r"\frac{a}{b", "number": None}, {"latex": r"\frac{a}{b}", "number": None}]
+    outcome = VisionClient(fake, "m", 512, LOGGER).run(job(), b"png")
+    assert outcome.result["latex"] == r"\frac{a}{b}" and outcome.calls == 2
+    assert "previous LaTeX was invalid" in fake.calls[1]["prompt"]
+    fake.responses["EquationResult"] = [{"latex": r"\frac{a}{b", "number": None}] * 2
+    outcome = VisionClient(fake, "m", 512, LOGGER).run(job(), b"png")
+    assert outcome.result["latex"] == r"\frac{a}{b"  # geçersiz de olsa son okuma döner; çıktıda [latex_unverified]
+
+
+def test_equation_hint_in_prompt():
+    assert equation_hint("�\nfcs(xi\nif t = 0  (2)") == (
+        "The PDF text layer of this region contains the following characters. Their order and layout are scrambled, "
+        "so use them only to identify the exact symbols, letters and indices, never as the structure: fcs(xi if t = 0")
+    assert equation_hint("\uf8f1  (3)") is None
+    fake = FakeBackend()
+    hinted = VisionJob("equation", "equation_requested", 2, (100, 500, 400, 520), "eq-1", hint="HINT")
+    VisionClient(fake, "m", 512, LOGGER).run(hinted, b"png")
+    assert fake.calls[0]["prompt"].endswith("\n\nHINT")
+    assert hinted.key == job().key  # ipucu önbellek anahtarını değiştirmez
 
 def test_client_gives_up_after_retries_and_on_timeout():
     fake = FakeBackend()
@@ -296,10 +337,32 @@ def test_real_vision_model_transcribes_synthetic_equation(synthetic_pdf, tmp_pat
         pytest.skip("Görsel model kurulu değil")
     path = synthetic_pdf("synthetic_table_equation.pdf")
     doc = parse_pdf(path, path.name, SHA, config.pdf)
-    jobs = [j for j in select_vision_jobs(doc, "balanced") if j.task == "equation"][:1]
+    # Formül metin katmanından kurulduğu için görsel işe dönüşmez; modelin okuması doğrudan sınanır.
+    equation = doc.equations[0]
+    jobs = [VisionJob("equation", "equation_requested", equation.page, tuple(equation.bbox), equation.id,
+                      equation_hint(equation.raw_text))]
     client = VisionClient(backend, "minicpm-v4.5:8b", 512, LOGGER)
     run = run_vision_jobs(path, jobs, client, tmp_path / "vision.json", tmp_path / "raw", tmp_path / "errors", 250, 8)
     enriched, warnings, applied = apply_vision_results(doc, jobs, run)
     equation = next(e for e in enriched.equations if e.id == jobs[0].ref_id)
     assert applied == 1 and warnings == []
     assert equation.latex_valid and "z" in equation.latex and "=" in equation.latex
+
+
+def test_equation_crop_masks_neighbouring_text():
+    import fitz
+    from src.render import render_region_png
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((100, 100), "MMMMMMMM", fontsize=12)  # komşu düzyazı: formül kutusunun üstünde
+    page.insert_text((100, 130), "x = 1", fontsize=12)
+    region = (100, 120, 140, 133)
+
+    def ink(png, rows=20):  # üstteki 20 piksel satırı (y 95-115): yalnızca komşu düzyazı
+        pixmap = fitz.Pixmap(png)
+        return sum(1 for y in range(0, rows) for x in range(0, pixmap.width) if pixmap.pixel(x, y)[0] < 128)
+
+    assert ink(render_region_png(page, region, 72, 25)) > 0
+    masked = render_region_png(page, region, 72, 25, mask_outside=True)
+    assert ink(masked) == 0
+    assert ink(masked, rows=fitz.Pixmap(masked).height) > 0  # formülün kendisi örtülmez

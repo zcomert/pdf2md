@@ -477,3 +477,39 @@ class MainWindow(tk.Tk):
 def run_app():
     window = MainWindow()
     window.mainloop()
+
+
+def gui_entry():
+    """`pdf2md-gui` konsol betiği ve `process_papers_gui.py` için ortak giriş noktası (§41)."""
+    import io
+    import multiprocessing
+    import sys
+
+    from ..dependencies import bootstrap_check
+
+    # Paralel ayrıştırma (spawn) worker'ları bu modülü içe aktarır; arayüz yalnızca ana süreçte açılır.
+    multiprocessing.freeze_support()
+    message = io.StringIO()
+    exit_code = bootstrap_check(stream=message)
+    if exit_code is not None:
+        # pythonw altında konsol yoktur: eksik paket mesajı ve kurulum komutu pencerede gösterilir.
+        if sys.stderr is not None:
+            sys.stderr.write(message.getvalue())
+        try:
+            import tkinter
+            from tkinter import messagebox
+            root = tkinter.Tk()
+            root.withdraw()
+            messagebox.showerror("pdf2md", message.getvalue())
+            root.destroy()
+        except Exception:  # noqa: BLE001 — tkinter de yoksa yalnızca konsol mesajı kalır
+            pass
+        return exit_code
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            pass
+    run_app()
+    return 0

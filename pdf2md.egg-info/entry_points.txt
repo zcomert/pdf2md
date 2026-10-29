@@ -1,0 +1,3 @@
+[console_scripts]
+pdf2md = src.cli:cli_entry
+pdf2md-gui = src.gui.app:gui_entry

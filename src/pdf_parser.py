@@ -213,11 +213,13 @@ def _visual_models(page_visuals, block_ids, blocks, sections):
             block = by_id.get(block_id)
             equations.append(Equation(id=equation_id, number=element.number, raw_text=element.raw_text, page=number,
                                       section=_section_title(sections, block.order) if block else None,
-                                      bbox=_round_bbox(element.bbox)))
+                                      bbox=_round_bbox(element.bbox), latex=element.latex,
+                                      latex_valid=True if element.latex else None))
             _link(by_id, block_id, equation_id)
             candidates.append(Candidate(id=f"cand-{len(candidates) + 1}", kind=CandidateKind.equation, page=number,
                                         bbox=_round_bbox(element.bbox), reasons=element.reasons, number=element.number,
-                                        ref_id=equation_id, needs_vision=True, vision_trigger="equation_requested"))
+                                        ref_id=equation_id, needs_vision=element.latex is None,
+                                        vision_trigger="equation_requested"))
         for element in visuals.figures:
             figure_id = f"fig-{len(figures) + 1}"
             block_id = block_ids.get(id(element.block))

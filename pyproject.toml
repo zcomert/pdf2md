@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf2md"
+version = "1.0.0"
+description = "Yerel akademik PDF işleme, Markdown dönüştürme ve bilgi çıkarım sistemi"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf==1.24.14",
+    "ollama==0.4.7",
+    "pydantic==2.10.6",
+    "pyyaml==6.0.2",
+    "pandas==2.2.3",
+    "tqdm==4.67.1",
+    "pillow==11.1.0",
+    "pylatexenc==2.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.4"]
+optional = ["openpyxl==3.1.5", "rich==15.0.0"]
+
+[project.scripts]
+pdf2md = "src.cli:cli_entry"
+pdf2md-gui = "src.gui.app:gui_entry"
+
+[tool.setuptools]
+packages = ["src", "src.gui"]

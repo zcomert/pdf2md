@@ -1,7 +1,8 @@
 """Görsel model çağırma kuralları (§12.3, §23). Tablo tek bir veri yapısıdır; mod × tetikleyici kararı buradan okunur."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .document_model import CandidateKind, PageClass
+from .vision_client import equation_hint
 
 FAST, BALANCED, FULL = "fast", "balanced", "full"
 
@@ -28,6 +29,7 @@ class VisionJob:
     page: int
     bbox: tuple | None   # None: tam sayfa
     ref_id: str | None = None
+    hint: str | None = field(default=None, compare=False)  # isteme eklenen metin katmanı ipucu (önbellek anahtarında yok)
 
     @property
     def key(self):
@@ -56,6 +58,7 @@ def select_vision_jobs(document, mode, needs=None, ocr_failed_pages=()):
             jobs.append(job)
 
     figures = {figure.id: figure for figure in document.figures}
+    equations = {equation.id: equation for equation in document.equations}
     for page in document.pages:
         if page.page_class == PageClass.scanned and not page.ocr_applied:
             trigger = "scanned_ocr_failed" if page.number in ocr_failed_pages else "scanned_no_ocr"
@@ -76,9 +79,14 @@ def select_vision_jobs(document, mode, needs=None, ocr_failed_pages=()):
                     add(VisionJob("table", "table_inconsistent", candidate.page, bbox, candidate.ref_id))
                 add(VisionJob("table", "candidate_full", candidate.page, bbox, candidate.ref_id))
         elif candidate.kind == CandidateKind.equation:
-            if needs["equations"]:
-                add(VisionJob("equation", "equation_requested", candidate.page, bbox, candidate.ref_id))
-            add(VisionJob("equation", "candidate_full", candidate.page, bbox, candidate.ref_id))
+            # LaTeX'i metin katmanından kurulmuş formül görsel modele gönderilmez (FULL dahil): karakterler PDF'in
+            # kendisinden geldiği için görsel okuma daha doğru olamaz (tablolardaki §13 kuralının karşılığı).
+            if candidate.needs_vision:
+                equation = equations.get(candidate.ref_id)
+                hint = equation_hint(equation.raw_text) if equation is not None else None
+                if needs["equations"]:
+                    add(VisionJob("equation", "equation_requested", candidate.page, bbox, candidate.ref_id, hint))
+                add(VisionJob("equation", "candidate_full", candidate.page, bbox, candidate.ref_id, hint))
         elif candidate.kind == CandidateKind.figure:
             figure = figures.get(candidate.ref_id)
             if needs["figures"] and figure is not None and not figure.caption:

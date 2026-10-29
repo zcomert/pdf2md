@@ -84,3 +84,24 @@ def main(argv=None, events=None, cancel_token=None):
     if args.input_positional:
         args.input_dir = args.input_positional
     return run(options_from_args(args), events=events or ConsoleEvents(), cancel_token=cancel_token).exit_code
+
+
+def cli_entry():
+    """`pdf2md` konsol betiği ve `process_papers.py` için ortak giriş noktası (§24, §38 kriter 19)."""
+    import signal
+
+    from .dependencies import bootstrap_check
+
+    exit_code = bootstrap_check()
+    if exit_code is not None:
+        return exit_code
+    if hasattr(signal, "SIGBREAK"):
+        # Windows Ctrl+Break varsayılan olarak süreci anında sonlandırır; finally blokları (kilit, state) çalışsın.
+        def _interrupt(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGBREAK, _interrupt)
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("İptal edildi.", file=sys.stderr)
+        return 130

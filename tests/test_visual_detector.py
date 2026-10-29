@@ -109,6 +109,37 @@ def test_inline_numbered_equation():
     assert [(e.number, e.raw_text) for e in visuals.equations] == [("2", "SPL = 20 log(p / p_ref)  (2)")]
 
 
+
+def test_number_with_invisible_box_glyph():
+    # LaTeX'in görünmez kutusu metin katmanında kontrol karakteri olarak kalır: "\x08 (1)"
+    equation = block(line("Hm(k) = 0", 320, 100, 420, math_chars=6))
+    number = block(line("\x08 (1)", 520, 100, 539))
+    visuals = PageVisuals()
+    _detect_equations(1, [equation, number], None, W, visuals)
+    assert [(e.number, e.raw_text) for e in visuals.equations] == [("1", "Hm(k) = 0  (1)")]
+
+
+def test_adjacent_prose_lines_are_not_absorbed():
+    # Pokorny: bitişik düzyazı satırları numara satırıyla 2 pt örtüşüyordu ve formüle alınıp metinden siliniyordu
+    intro = block(line("the ordered vector components of", 307, 543, 427, size=12))
+    equation = block(line("I = {i1, ..., iNF}.", 307, 561, 363, size=12, math_chars=8))
+    number = block(line("(3)", 547, 559, 558, size=13))
+    after = block(line("gave us", 319, 574, 345, size=12))
+    visuals = PageVisuals()
+    result = _detect_equations(1, [intro, equation, number, after], None, W, visuals)
+    assert [e.raw_text for e in visuals.equations] == ["I = {i1, ..., iNF}.  (3)"]
+    assert sorted(b.text for b in result if b.type == BlockType.paragraph) == ["gave us", "the ordered vector components of"]
+
+
+def test_explanation_line_below_equation_is_prose():
+    equation = block(line("y = f(x)", 120, 300, 200, math_chars=4))
+    number = block(line("(2)", 270, 300, 282))
+    where = block(line("where Si", 58, 314, 100, math_chars=2))
+    visuals = PageVisuals()
+    _detect_equations(1, [equation, number, where], 298.0, W, visuals)
+    assert visuals.equations[0].raw_text == "y = f(x)  (2)"
+
+
 # --- şekiller ---
 
 def test_figure_panels_grouped_under_caption_and_labels_absorbed():

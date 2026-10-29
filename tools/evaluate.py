@@ -44,7 +44,8 @@ def tokens(text):
 
 
 def norm_latex(latex):
-    text = latex or ""
+    text = re.sub(r"\\tag\*?\{[^{}]*\}", "", latex or "")
+    text = text.replace(r"\ldots", "...").replace(r"\dots", "...")
     for command in (r"\left", r"\right", r"\,", r"\!", r"\;", r"\:", r"\quad", r"\qquad", r"\displaystyle"):
         text = text.replace(command, "")
     text = re.sub(r"\\(?:mathrm|text|mathbf|boldsymbol|operatorname)\s*\{([^{}]*)\}", r"\1", text)

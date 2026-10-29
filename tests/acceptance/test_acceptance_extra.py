@@ -55,7 +55,7 @@ def test_evaluator_scores_synthetic_reference(tmp_input_copy, tmp_output, no_ocr
     tables = evaluate.score_tables(reference, markdown)
     assert tables[0]["cell_accuracy"] == 1.0
     equations, valid_rate = evaluate.score_equations(reference, markdown)
-    assert equations[0]["exact"] and valid_rate == 1.0  # sahte görsel model formül 1'i doğru LaTeX'e çevirir
+    assert equations[0]["exact"] and valid_rate == 1.0  # formül 1 metin katmanından birebir LaTeX'e çevrilir
     assert evaluate.score_bibliographic(reference, record)["title"] is True
     summary = evaluate.summarize([{"bibliographic": evaluate.score_bibliographic(reference, record), "tables": tables,
                                    "equations": equations, "latex_valid_rate": valid_rate,

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from .atomic_io import atomic_write_json
 from .document_model import Block, BlockType, DocumentWarning, SourceMethod
+from .equation_latex import clean_latex
 from .evidence_verifier import validate_latex
 from .pdf_parser import build_sections, open_pdf
 from .render import render_page_png, render_region_png
@@ -66,7 +67,7 @@ def run_vision_jobs(pdf_path, jobs, client, cache_path, raw_dir, errors_dir, ren
                 size = (round(page.rect.width * dpi / 72), round(page.rect.height * dpi / 72))
             else:
                 padding = TABLE_PADDING_PT if job.task == "table" else padding_pt
-                png = render_region_png(page, job.bbox, render_dpi, padding)
+                png = render_region_png(page, job.bbox, render_dpi, padding, mask_outside=job.task == "equation")
                 size = (round((job.bbox[2] - job.bbox[0] + 2 * padding) * render_dpi / 72),
                         round((job.bbox[3] - job.bbox[1] + 2 * padding) * render_dpi / 72))
             outcome = client.run(job, png, raw_dir=raw_dir, errors_dir=errors_dir, image_size=size)
@@ -110,7 +111,7 @@ def apply_vision_results(document, jobs, run):
                                                 message=f"{mismatches} hücre metin katmanıyla uyuşmadı"))
         elif job.task == "equation" and job.ref_id in equations:
             equation = equations[job.ref_id]
-            equation.latex = result["latex"].strip()
+            equation.latex = clean_latex(result["latex"])
             equation.latex_valid = validate_latex(equation.latex)[0]
             equation.source_method = SourceMethod.vision
         elif job.task == "figure" and job.ref_id in figures:

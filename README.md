@@ -16,7 +16,7 @@ Model çağrıları yalnızca yerel Ollama servisine (`127.0.0.1`) gider; PDF i�
 ## Özellikler
 
 - **PDF türleri:** metin tabanlı, taranmış (Tesseract OCR) ve karışık PDF'ler; çift sütun okuma sırası; üst/alt bilgi temizliği; başlık hiyerarşisi
-- **Görsel içerik:** tablo, formül ve şekiller MiniCPM-V ile işlenir. Görselden okunan tablo sayıları metin katmanıyla karşılaştırılır.
+- **Görsel içerik:** tablo, formül ve şekiller MiniCPM-V ile işlenir. Görselden okunan tablo sayıları metin katmanıyla karşılaştırılır. Formül LaTeX'i önce PDF'in metin katmanından (karakter konumu, puntosu, fontu ve kesir çizgileri) kurulur; yalnızca kurulamayan formüller (cases, matris, eşlenmemiş glifler) görsel modele gider.
 - **Prompt planlama:** Gemma, isteği kapsam, alanlar ve çıktı başlıklarından oluşan bir plana dönüştürür. Planı `--plan-only` ile önceden görebilirsiniz.
 - **Kanıt doğrulama:** her sayısal değer blok kimliği ve sayfayla kaynağa bağlanır. Doğrulanamayan değerler `[unverified]` olarak işaretlenir.
 - **Koleksiyon analizi:** makaleler arası karşılaştırma yapılır; her iddiada makale ve sayfa gösterilir.
@@ -212,8 +212,8 @@ Giriş dosyaları hiçbir koşulda değiştirilmez. `_cache` klasörünü silmek
 | Mod | Görsel modele giden içerik | Ne zaman |
 |---|---|---|
 | `fast` | Yalnızca taranmış sayfalar | Hızlı tarama, metin ağırlıklı istekler |
-| `balanced` | Metin katmanından yapılandırılamayan tablolar, formüller, başlıksız şekiller | Varsayılan |
-| `full` | Tüm tablo, formül ve şekil adayları | Tablo ve formül doğruluğunun önemli olduğu işler |
+| `balanced` | Metin katmanından yapılandırılamayan tablolar ve formüller, başlıksız şekiller | Varsayılan |
+| `full` | Tüm şekil adayları, metin katmanından yapılandırılamayan tüm tablo ve formüller | Tablo ve formül doğruluğunun önemli olduğu işler |
 
 Tetikleyiciler log dosyasında görsel görev başına kaydedilir.
 
@@ -283,14 +283,15 @@ Son kullanılan ayarlar kullanıcı profilinde saklanır.
 | Künye (başlık, yazarlar, yıl, dergi, DOI) | 1.0 | 1.0 | 1.0 | alan başına ≥ 0,9 |
 | Tablo hücreleri (yapılandırılmış tabloda) | 0 | 0,66 | 0,66 | BALANCED/FULL ≥ 0,6 |
 | Tablo hücre metni çıktıda | 0,85 | 0,85 | 0,85 | ≥ 0,8 |
-| Formül benzerliği ≥ 0,9 | 0 | 0,77 | 0,77 | BALANCED/FULL ≥ 0,7 |
+| Formül benzerliği ≥ 0,9 ¹ | 0,69 | 1.0 | 1.0 | BALANCED/FULL ≥ 0,7 |
 | LaTeX geçerli | — | 1.0 | 1.0 | ≥ 0,95 |
 | Referans tablo hücresiyle çelişen `verified` (kriter 21) | 0 | 0 | 0 | **= 0** |
 | Sayısal sonuç geri çağırma (`verified`) | 0,15 | 0,17 | 0,04 | eşik önerilmiyor |
 
 Yorum:
 
-- **FAST** görsel modeli yalnızca taranmış sayfalar için kullanır. Bu nedenle tablolar yapılandırılmaz ve formüller LaTeX'e çevrilmez; içerik ham metin olarak kalır.
+- ¹ Formül satırı 2026-10-29 ölçümüdür (13 referans formül; metin katmanından LaTeX ve yeni görsel model istemi). Önceki değerler FAST 0, BALANCED/FULL 0,77 idi. FULL, formüllerde BALANCED ile aynı görsel işleri çalıştırır.
+- **FAST** görsel modeli yalnızca taranmış sayfalar için kullanır. Bu nedenle tablolar yapılandırılmaz; formüllerden yalnızca metin katmanından kurulabilenler LaTeX'e çevrilir (gerçek sette 13 formülün 9'u), diğerleri ham metin olarak kalır.
 - **Tablolar:** yapılandırılamayan tablolar çok düzeyli başlıklı veya metin katmanı dağınık tablolardır (Polle Tablo 1b ve 2, Vekkot Tablo 1).
 - **Sayısal sonuç geri çağırma** düşük ve çalıştırmalar arasında değişken. Metin modeli, promptla "tüm sonuçlar" istense de yalnızca bir kısmını çıkarıyor. Model adını kısaltabiliyor ("MFCC+Stat-Bi-LSTM" yerine "Bi-LSTM") veya belgede olmayan blok kimliği gösterebiliyor. Bu durumlarda değer `[unverified]` / `[source_not_found]` olarak işaretlenir, doğrulanmış sayılmaz. Belirli sonuçları hedefleyen dar promptlar daha iyi sonuç verir.
 - Tablo kanıtında değer, model satırı ile metrik sütununun kesiştiği hücrede aranır; çok düzeyli başlıklar dahil. İlk ölçümde görülen yanlış sütun doğrulaması bu kuralla giderildi.

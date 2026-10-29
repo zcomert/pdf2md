@@ -146,7 +146,9 @@ def _render_table(table, lookup):
 def _render_equation(equation):
     if equation.latex:
         marker = f" {LATEX_UNVERIFIED}" if equation.latex_valid is False else ""
-        return f"$$\n{equation.latex}\n$${marker}"
+        # Numara `\tag` ile yazılır: metindeki "Eq. (3)" atıfları çıktıda karşılığını bulur.
+        tag = f" \\tag{{{equation.number}}}" if equation.number and equation.latex_valid is not False else ""
+        return f"$$\n{equation.latex}{tag}\n$${marker}"
     return _fenced(equation.raw_text or "") + "\n\n" + LATEX_UNAVAILABLE
 
 
